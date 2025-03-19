@@ -41,6 +41,7 @@ from .mixes import DataMix, DataMixBase
 from .tokenizer import TokenizerConfig
 from .utils import (
     bucket_documents,
+    bucket_documents_kas,
     chunk_array,
     divide_into_buckets,
     get_doc_lengths_from_indices,
@@ -51,6 +52,10 @@ from .utils import (
     run_worker_func,
     segment_documents_into_instances,
 )
+
+import pandas as pd
+from ast import literal_eval
+from tqdm import tqdm
 
 __all__ = [
     "NumpyDatasetBase",
@@ -1418,6 +1423,174 @@ class NumpyVSLDataset(NumpyDatasetBase, Dataset[Dict[str, Any]]):
             assert self._lengths_dtype is not None
         return self._lengths_dtype
 
+class NumpyKASVSLDataset(NumpyVSLDataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.metadata = self._get_metadata()
+        
+
+    def _get_entities_within_range(self, data: Dict[str, str], start: int, end: int) -> List[Dict[str, str]]:
+        """
+        Extracts entities that fall within the given start and end positions.
+        
+        :param data: Dictionary containing 'entities' as a string-represented list.
+        :param start: Start position.
+        :param end: End position.
+        :return: List of entities within the given range.
+        """
+        entities = literal_eval(data['entities'])
+        entities = [
+            entity for entity in entities
+            if start <= entity["entity_token_start"] and end >= entity["entity_token_end"]
+        ]
+        # Update token offsets to be relative to the chunk.
+        return [
+            {
+                "entity_text": entity["entity_text"],
+                "entity_name": entity["entity_name"],
+                "entity_token_start": entity["entity_token_start"] - start,
+                "entity_token_end": entity["entity_token_end"] - start,
+            }
+            for entity in entities
+        ]
+    
+    def _get_metadata(self) -> Dict[str, Any]:
+        def _load_metadata(file_path: str) -> list[Dict[str, Any]]:
+            """Loads metadata from a compressed CSV file and parses entities."""
+            column_names = ['start', 'end', 'id', 'src', 'loc', 'title', 'entities']
+            df = pd.read_csv(file_path, names=column_names)
+            return df.to_dict(orient='records')
+
+        metadata = {
+            path: {
+                "metadata_path": (metadata_path := os.path.join(os.path.dirname(path), os.path.basename(path).replace(".npy", ".csv.gz"))),
+                "metadata": _load_metadata(metadata_path)
+            }
+            for path in tqdm(self.paths)
+        }
+
+        return metadata
+
+    def _read_chunk_indices(self, path: PathOrStr, index: int) -> Tuple[int, int]:
+        indices_path = self._get_document_indices_path(path)
+        indices = load_array_slice_into_tensor(
+            indices_path, index * 2, index * 2 + 2, self.indices_dtype
+        )
+        start_idx, end_idx = indices
+        return int(start_idx), int(end_idx)
+    
+    def __getitem__(self, index: int) -> Dict[str, Any]:
+        index = int(index)  # in case this is a numpy int type.
+        pos_index = index if index >= 0 else len(self) + index
+
+        # The index of the array within 'self.paths'.
+        array_index: Optional[int] = None
+        # The index within the corresponding array.
+        array_local_index: Optional[int] = None
+        for i, (offset_start, offset_end) in enumerate(self.offsets):
+            if offset_start <= pos_index < offset_end:
+                array_index = i
+                array_local_index = pos_index - offset_start
+                break
+
+        if array_index is None or array_local_index is None:
+            raise IndexError(f"{index} is out of bounds for dataset of size {len(self)}")
+
+        # Read the data from file.
+        path = self.paths[array_index]
+        start_idx, end_idx = self._read_chunk_indices(path, array_local_index)
+        input_ids = load_array_slice_into_tensor(path, start_idx, end_idx, self.dtype)
+
+        out: Dict[str, Any] = {"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}
+
+        if self._include_instance_metadata:
+            # Find metadata entry matching start_idx and end_idx
+            metadata = next(
+                (m for m in self.metadata[path]["metadata"] if start_idx >= m["start"] and end_idx <= m["end"]),
+                None
+            )
+            
+            if metadata is None:
+                raise ValueError(
+                    f"Metadata not found for chunk in path: {self.metadata[path]['metadata_path']}, indices: start={start_idx}, end={end_idx}."
+                )    
+            
+            # Keep only the entities that correspond to this chunk.
+            metadata = deepcopy(metadata)
+            doc_start_idx = metadata["start"]
+            chunk_start_idx, chunk_end_idx = start_idx - doc_start_idx, end_idx - doc_start_idx
+            metadata["entities"] = self._get_entities_within_range(metadata, chunk_start_idx, chunk_end_idx)
+            
+            out["metadata"] = metadata
+        
+
+        return out
+    
+    def _write_document_indices(self):
+        paths_needed: List[PathOrStr] = []
+        for path in self.paths:
+            indices_path = self._get_document_indices_path(path)
+            if indices_path.is_file():
+                log.info(f"Reusing document indices for '{path}' at:\n'{indices_path}'")
+            elif path not in paths_needed:
+                paths_needed.append(path)
+
+        if paths_needed:
+            with concurrent.futures.ProcessPoolExecutor() as executor:
+                futures = []
+                for path in paths_needed:
+                    indices_path = self._get_document_indices_path(path)
+                    log.info(f"Gathering document indices for '{path}'...")
+                    metadata = self.metadata[path]["metadata"]
+                    future = executor.submit(
+                        run_worker_func,
+                        bucket_documents_kas,
+                        path,
+                        metadata,
+                        indices_path,
+                        buckets=self.all_sequence_lengths,
+                        eos_token_id=self.eos_token_id,
+                        dtype=self.dtype,
+                        indices_dtype=self.indices_dtype,
+                    )
+                    futures.append(future)
+
+                concurrent.futures.wait(futures, return_when="ALL_COMPLETED")
+
+                # Log results.
+                for path, future in zip(paths_needed, futures):
+                    total_og_docs, total_bucketed_docs = future.result()
+                    log.info(
+                        f"Created {total_bucketed_docs:,d} bucketed documents by sequence length from "
+                        f"{total_og_docs:,d} original documents in '{path}'"
+                    )
+
+    def _write_instance_buckets(self, instance_lengths: np.ndarray):
+        for seq_len in self.all_sequence_lengths:
+            bucket_path = self._get_instance_bucket_path(seq_len)
+            if bucket_path.is_file():
+                log.info(
+                    f"Reusing instance indices for seq len {seq_len} bucket at:\n'{bucket_path}'"
+                )
+            else:
+                log.info(f"Gathering instance indices for seq len {seq_len} bucket...")
+                bucket_path.parent.mkdir(exist_ok=True, parents=True)
+
+                def next_power_of_2(x):
+                    return 1 << (int(x) - 1).bit_length()  # Bitwise trick to find the next power of 2
+                
+                instance_buckets = np.array([next_power_of_2(x) for x in instance_lengths])
+                instance_indices = (instance_buckets == seq_len).nonzero()[0]
+                with memmap_to_write(
+                    bucket_path,
+                    dtype=self.indices_dtype,
+                    shape=instance_indices.shape,
+                ) as bucket:
+                    bucket[:] = instance_indices
+                log.info(
+                    f"Instance indices for seq len {seq_len} bucket written to:\n'{bucket_path}'"
+                )
+
 
 class VSLCurriculumType(StrEnum):
     """
@@ -1791,6 +1964,31 @@ class NumpyDatasetConfig(Config):
                     "'generate_doc_lengths' is only valid for FSL datasets"
                 )
             dataset = NumpyVSLDataset(
+                *paths,
+                max_sequence_length=self.max_sequence_length,
+                min_sequence_length=self.min_sequence_length,
+                curriculum=None if self.vsl_curriculum is None else self.vsl_curriculum.build(),
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+                vocab_size=self.tokenizer.vocab_size,
+                dtype=self.get_dtype(),
+                metadata=metadata,
+                include_instance_metadata=self.include_instance_metadata,
+            )
+        elif self.name == NumpyDatasetType.kas_vsl:
+            if self.max_sequence_length is None:
+                raise OLMoConfigurationError("'max_sequence_length' is required for VSL datasets")
+            if self.min_sequence_length is None:
+                raise OLMoConfigurationError("'min_sequence_length' is required for VSL datasets")
+            if self.sequence_length is not None:
+                raise OLMoConfigurationError(
+                    "'sequence_length' is only a valid field for FSL datasets"
+                )
+            if self.generate_doc_lengths:
+                raise OLMoConfigurationError(
+                    "'generate_doc_lengths' is only valid for FSL datasets"
+                )
+            dataset = NumpyKASVSLDataset(
                 *paths,
                 max_sequence_length=self.max_sequence_length,
                 min_sequence_length=self.min_sequence_length,

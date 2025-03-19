@@ -49,6 +49,7 @@ from .numpy_dataset import (
     NumpyDatasetType,
     NumpyFSLDataset,
     NumpyVSLDataset,
+    NumpyKASVSLDataset
 )
 from .utils import get_rng, iter_batched, load_array_slice, memmap_to_write
 
@@ -327,7 +328,7 @@ class NumpyDataLoaderBase(DataLoaderBase):
                 data_loader.chunk_size = (
                     dataset.max_target_sequence_length // dataset.sequence_length
                 )
-        elif isinstance(dataset, NumpyVSLDataset):
+        elif isinstance(dataset, NumpyVSLDataset) or isinstance(dataset, NumpyKASVSLDataset):
             data_loader = NumpyVSLDataLoader(
                 dataset,
                 **kwargs,  # type: ignore
@@ -454,8 +455,8 @@ class NumpyDataLoaderBase(DataLoaderBase):
             num_workers=self.num_workers,
             pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
             prefetch_factor=self.prefetch_factor,
-            persistent_workers=False,
-            timeout=0,
+            persistent_workers=True,
+            timeout=120,
         )
 
     def _get_dataset_item(self, idx: int) -> Dict[str, Any]:
@@ -894,6 +895,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[Dict[str, Any]]):
             indices = self.data_loader._get_local_instance_indices(global_indices)
             instance_iterator = (self.data_loader._get_dataset_item(int(idx)) for idx in indices)
 
+        # Daniela make iter_batched_kas and depending on the dataloader type, call the appropriate one
         return (
             self.data_loader.collator(batch)
             for batch in iter_batched(instance_iterator, self.data_loader.rank_batch_size)
