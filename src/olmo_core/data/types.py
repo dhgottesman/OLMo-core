@@ -27,6 +27,11 @@ class NumpyDatasetType(StrEnum):
     Variable sequenced length ➡️ :class:`NumpyVSLDataset`.
     """
 
+    kas_vsl = "kas_vsl"
+    """
+    Variable sequenced length ➡️ :class:`NumpyKASVSLDataset`.
+    """
+
 
 class NumpyDatasetDType(StrEnum):
     uint8 = "uint8"

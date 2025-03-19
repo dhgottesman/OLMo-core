@@ -24,6 +24,9 @@ from olmo_core.aliases import PathOrStr
 from olmo_core.io import add_cached_path_clients, get_bytes_range, is_url, resource_path
 from olmo_core.utils import capped_powers_of_2
 
+from ast import literal_eval
+
+from tqdm import tqdm
 
 def split_batch(batch: Dict[str, Any], num_microbatch_instances: int) -> List[Dict[str, Any]]:
     """
@@ -201,7 +204,6 @@ def iter_document_indices(
                 start_index, end_index, *_ = line.split(",")
                 yield int(start_index), int(end_index)
 
-
 def get_document_indices(
     data_path: PathOrStr, local_cache: Optional[PathOrStr] = None
 ) -> List[Tuple[int, int]]:
@@ -305,12 +307,12 @@ def iter_batched(
 
         batch.append(x)
         tokens += x_num_tokens
-        if shape is not None and shape != x["input_ids"].shape:
-            raise RuntimeError(
-                f"Items in batch don't have the same shape! Expected {shape}, "
-                f"got {tuple(x['input_ids'].shape)}"
-            )
-        shape = tuple(x["input_ids"].shape)
+        # if shape is not None and shape != x["input_ids"].shape:
+        #     raise RuntimeError(
+        #         f"Items in batch don't have the same shape! Expected {shape}, "
+        #         f"got {tuple(x['input_ids'].shape)}"
+        #     )
+        # shape = tuple(x["input_ids"].shape)
 
     if batch:
         yield tuple(batch)
@@ -395,6 +397,79 @@ def bucket_documents(
             indices.append(start_idx)
             indices.append(start_idx + x)
             start_idx += x
+
+    with memmap_to_write(target, dtype=indices_dtype, shape=(len(indices),)) as indices_mmap:
+        indices_mmap[:] = indices
+
+    return total_og_docs, len(indices) // 2
+
+def bucket_documents_kas(
+    path: PathOrStr,
+    metadata: Dict[str, Any],
+    target: Path,
+    *,
+    buckets: Sequence[int],
+    eos_token_id: int,
+    dtype: Union[Type[np.uint8], Type[np.uint16], Type[np.uint32], Type[np.uint64]],
+    indices_dtype: Union[
+        Type[np.uint8], Type[np.uint16], Type[np.uint32], Type[np.uint64]
+    ] = np.uint32,
+) -> Tuple[int, int]:
+    """
+    Bucket documents by sequence lengths in powers of 2. Saving the indices of the bucketed
+    documents to ``target``.
+
+    Returns the number of original documents and the number of new bucketed documents.
+    """
+    max_sequence_length = max(buckets)
+    min_sequence_length = min(buckets)
+
+    total_og_docs = 0
+    indices = []
+    for doc_idx, (start_idx, end_idx) in tqdm(enumerate(iter_document_indices(path, eos_token_id=eos_token_id, dtype=dtype)), total=len(metadata)):
+        # Get entities for the document, adjusting indices to absolute offsets
+        entities = literal_eval(metadata[doc_idx]["entities"])
+        entities = [
+            {
+                "start": entity["entity_token_start"] + start_idx,
+                "end": entity["entity_token_end"] + start_idx
+            }
+            for entity in entities
+        ]
+    
+        total_og_docs += 1
+
+        remaining_length = end_idx - start_idx
+        while remaining_length > 0:
+            # Get chunk sizes for the remaining text
+            bin_decomp = capped_powers_of_2(remaining_length, max_sequence_length)
+
+            for x in bin_decomp:
+                if x < min_sequence_length:
+                    # Reset remaining_length so we break out of the outer loop and continue to the next document.
+                    remaining_length = 0
+                    break
+
+                # Adjust the chunk boundary to avoid splitting entities:
+                # (a) If the boundary aligns with the end of an entity, include the entire entity in the current chunk.
+                # (b) If the boundary falls within an entity, shift it back to the entity's start so it fully moves to the next chunk.
+                # (c) If the boundary is at the start of an entity, keep it as is, since the chunk end is non-inclusive and the entity 
+                #     will roll over to the next chunk.
+                chunk_end = start_idx + x
+                while any(entity["start"] < chunk_end < entity["end"] for entity in entities):
+                    chunk_end -= 1
+
+                indices.append(start_idx)
+                indices.append(chunk_end)
+
+                # Update remaining length and next start index
+                adjusted_chunk_size = chunk_end - start_idx
+                remaining_length -= adjusted_chunk_size
+                start_idx = chunk_end # Move start to the next chunk
+
+                if adjusted_chunk_size < x:
+                    break # Recompute bin_decomp in the next iteration
+
 
     with memmap_to_write(target, dtype=indices_dtype, shape=(len(indices),)) as indices_mmap:
         indices_mmap[:] = indices
