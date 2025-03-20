@@ -133,15 +133,14 @@ def build_config(run_name: str, overrides: List[str]) -> ExperimentConfig:
     )
 
     dataset_config = NumpyDatasetConfig.glob(
-        # "/home/morg/students/gottesman3/knowledge-analysis-suite/dolma/python/wikipedia_vsl/part*.npy",  # can be globs
-        "/home/morg/students/gottesman3/knowledge-analysis-suite/dolma/python/wikipedia_vsl/part-00-00000.npy",
+        "/home/morg/students/gottesman3/knowledge-analysis-suite/dolma/python/wikipedia_vsl/part*.npy",  # can be globs
         name=NumpyDatasetType.kas_vsl,
         max_sequence_length=2048,
         min_sequence_length=64,
         vsl_curriculum=VSLCurriculumConfig(name=VSLCurriculumType.grow_p2, num_cycles=8, balanced=False),
         tokenizer=tokenizer_config,
         work_dir=os.path.join(run_name, "dataset-cache"),
-        include_instance_metadata=False,
+        include_instance_metadata=True,
     )
 
     data_loader_config = NumpyDataLoaderConfig(
@@ -235,12 +234,12 @@ def main(run_name: str, overrides: List[str]):
 
     # optim = config.optim.build(model)
     dataset = config.dataset.build()
-    data_loader = config.data_loader.build(dataset, mesh=world_mesh, collator=DataCollator(pad_token_id=config.dataset.tokenizer.pad_token_id))
-    data_loader.reshuffle(1)
-    batch = None
-    for batch in data_loader:
-        print(batch)
-        break
+    data_loader = config.data_loader.build(dataset, mesh=world_mesh)
+    # data_loader.reshuffle(1)
+    # batch = None
+    # for batch in data_loader:
+    #     print(batch)
+    #     break
     # trainer = config.trainer.build(model, optim, data_loader, mesh=world_mesh)
 
     # # Save config to W&B and each checkpoint dir.

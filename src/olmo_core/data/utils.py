@@ -307,16 +307,36 @@ def iter_batched(
 
         batch.append(x)
         tokens += x_num_tokens
-        # if shape is not None and shape != x["input_ids"].shape:
-        #     raise RuntimeError(
-        #         f"Items in batch don't have the same shape! Expected {shape}, "
-        #         f"got {tuple(x['input_ids'].shape)}"
-        #     )
-        # shape = tuple(x["input_ids"].shape)
+        if shape is not None and shape != x["input_ids"].shape:
+            raise RuntimeError(
+                f"Items in batch don't have the same shape! Expected {shape}, "
+                f"got {tuple(x['input_ids'].shape)}"
+            )
+        shape = tuple(x["input_ids"].shape)
 
     if batch:
         yield tuple(batch)
 
+def iter_batched_kas(
+    iterable: Iterable[Dict[str, Any]], batch_num_tokens: int
+) -> Iterable[Tuple[Dict[str, Any], ...]]:
+    batch: List[Dict[str, Any]] = []
+    tokens = 0
+    shape: Optional[Tuple[int, ...]] = None
+    for x in iterable:
+        x_num_tokens = x["input_ids"].numel()
+        assert x_num_tokens <= batch_num_tokens, f"{x_num_tokens} > {batch_num_tokens}"
+
+        if (tokens + x_num_tokens) > batch_num_tokens:
+            yield tuple(batch)
+            batch.clear()
+            tokens = 0
+
+        batch.append(x)
+        tokens += x_num_tokens
+
+    if batch:
+        yield tuple(batch)
 
 @contextmanager
 def memmap_to_write(
@@ -458,6 +478,13 @@ def bucket_documents_kas(
                 chunk_end = start_idx + x
                 while any(entity["start"] < chunk_end < entity["end"] for entity in entities):
                     chunk_end -= 1
+
+                # Daniela, remove this when the metadata is fixed.
+                if chunk_end == start_idx:
+                    # Reset remaining_length so we break out of the outer loop and continue to the next document.
+                    # No entity should be so long... Right now this happens when we incorrectly identify Files as entities.
+                    remaining_length = 0
+                    break                    
 
                 indices.append(start_idx)
                 indices.append(chunk_end)
