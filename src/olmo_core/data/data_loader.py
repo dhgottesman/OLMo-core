@@ -49,9 +49,9 @@ from .numpy_dataset import (
     NumpyDatasetType,
     NumpyFSLDataset,
     NumpyVSLDataset,
-    NumpyKASVSLDataset
+    NumpyKASVSLDataset,
 )
-from .utils import get_rng, iter_batched, load_array_slice, memmap_to_write
+from .utils import get_rng, iter_batched, iter_batched_kas, load_array_slice, memmap_to_write
 
 __all__ = [
     "DataLoaderBase",
@@ -895,10 +895,10 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[Dict[str, Any]]):
             indices = self.data_loader._get_local_instance_indices(global_indices)
             instance_iterator = (self.data_loader._get_dataset_item(int(idx)) for idx in indices)
 
-        # Daniela make iter_batched_kas and depending on the dataloader type, call the appropriate one
+        iter_fn = iter_batched_kas if isinstance(self.data_loader.dataset, NumpyKASVSLDataset) else iter_batched
         return (
             self.data_loader.collator(batch)
-            for batch in iter_batched(instance_iterator, self.data_loader.rank_batch_size)
+            for batch in iter_fn(instance_iterator, self.data_loader.rank_batch_size)
         )
 
 
