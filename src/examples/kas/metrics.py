@@ -121,7 +121,7 @@ class BaseMetrics:
         for batch in tqdm(self.data_loader, total=len(self.data_loader)):
             result = iterative_fn(batch, result)
             batch_metric = metric_fn(result)
-            self.logger.log_metrics(batch_metric)
+            self.logger.log_batch_metrics(batch_metric)
 
         # Final result after all batches processed
         self.logger.log_dataset_metrics(batch_metric)
