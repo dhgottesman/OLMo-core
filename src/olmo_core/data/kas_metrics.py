@@ -126,7 +126,7 @@ class BaseMetrics:
         # Final result after all batches processed
         self.logger.log_dataset_metrics(batch_metric)
 
-def entity_coverage(batch, entities):
+def _entity_coverage(batch, entities):
     """
     Iteratively computes entity coverage by maintaining a running set of encountered entities.
 
@@ -140,7 +140,7 @@ def entity_coverage(batch, entities):
     metadata_list = batch.get("metadata", [])
     for metadata in metadata_list:
         for entity in metadata.get("entities", []):
-            entities.add(entity["qid"])
+            entities.add(entity["name"])
 
     return entities
 
@@ -150,4 +150,4 @@ def compute_entity_coverage(entities):
 # Example usage: 
 # logger = MetricsLogger(run_name)
 # metrics = BaseMetrics(data_loader, logger)
-# metrics.compute_iterative_metrics(entity_coverage, compute_entity_coverage, set())
+# metrics.compute_iterative_metrics(_entity_coverage, compute_entity_coverage, set())

@@ -57,6 +57,12 @@ import pandas as pd
 from ast import literal_eval
 from tqdm import tqdm
 
+import csv
+from io import StringIO
+import json
+from concurrent.futures import ThreadPoolExecutor
+import sys
+
 __all__ = [
     "NumpyDatasetBase",
     "NumpyFSLDataset",
@@ -1423,13 +1429,73 @@ class NumpyVSLDataset(NumpyDatasetBase, Dataset[Dict[str, Any]]):
             assert self._lengths_dtype is not None
         return self._lengths_dtype
 
+class KASMetadata:
+    def __init__(self, metadata_path: str, index_path: PathOrStr, headers: List[str]):
+        self.metadata_path = metadata_path
+        self.index_path = index_path
+        self.headers = headers
+        self.index = self._build_index()
+
+    def _build_index(self) -> List[int]:
+        if os.path.exists(self.index_path):
+            return np.load(self.index_path)
+        else:
+            index = []
+            with open(self.metadata_path, 'rb') as f, tqdm(desc=f"Building index {os.path.basename(self.metadata_path)}") as pbar:
+                pos = f.tell()
+                while f.readline():
+                    index.append(pos)
+                    pos = f.tell()
+                    pbar.update(1)
+            index_array = np.array(index, dtype=np.uint64)
+            np.save(self.index_path, index_array)
+            return index
+        
+    def __len__(self) -> int:
+        return len(self.index)
+
+    def __getitem__(self, i: int) -> dict:
+        csv.field_size_limit(sys.maxsize)
+        with open(self.metadata_path, 'rb') as f:
+            f.seek(self.index[i])
+            line = f.readline().decode('utf-8').strip()
+            values = next(csv.reader([line]))
+            record = dict(zip(self.headers, values))
+            # Convert int representations to int
+            for key in ['start', 'end', 'id', 'loc']:
+                record[key] = int(record[key])
+            # Convert string representations of lists to actual lists
+            record["entities"] = literal_eval(record["entities"])
+            record["offsets"] = literal_eval(record["offsets"])
+            return record
+        
+    def get_for_span(self, start_idx, end_idx):
+        left = 0
+        right = len(self.index) - 1
+
+        while left <= right:
+            mid = (left + right) // 2
+            m = self.__getitem__(mid)
+
+            if m["start"] <= start_idx and end_idx <= m["end"]:
+                return m  # Found the unique containing interval
+            elif start_idx < m["start"]:
+                right = mid - 1
+            else:  # end_idx > m["end"]
+                left = mid + 1
+
+        return None  # No containing interval found)
+
 class NumpyKASVSLDataset(NumpyVSLDataset):
     def __init__(self, *args, **kwargs):
+        work_dir = kwargs.pop("work_dir", None)
+        if work_dir is not None:
+            work_dir = Path(work_dir)
         super().__init__(*args, **kwargs)
-        self.metadata = self._get_metadata()
-        
+        self.work_dir = work_dir
+        self.metadata = self._load_metadata()
 
-    def _get_entities_within_range(self, data: Dict[str, str], start: int, end: int) -> List[Dict[str, str]]:
+    def _get_entities_within_range(self, entities: List[Dict[str, Any]], tok_start: int, tok_end: int, char_start: int) -> List[Dict[str, str]]:
         """
         Extracts entities that fall within the given start and end positions.
         
@@ -1438,38 +1504,54 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         :param end: End position.
         :return: List of entities within the given range.
         """
-        entities = literal_eval(data['entities'])
         entities = [
             entity for entity in entities
-            if start <= entity["entity_token_start"] and end >= entity["entity_token_end"]
+            if tok_start <= entity["tok_start"] and tok_end >= entity["tok_end"]
         ]
         # Update token offsets to be relative to the chunk.
         return [
             {
-                "entity_text": entity["entity_text"],
-                "entity_name": entity["entity_name"],
-                "entity_token_start": entity["entity_token_start"] - start,
-                "entity_token_end": entity["entity_token_end"] - start,
+                "text": entity["text"],
+                "name": entity.get("name", ""),
+                "tok_start": entity["tok_start"] - tok_start,
+                "tok_end": entity["tok_end"] - tok_start,
+                "char_start": entity["char_start"] - char_start,
+                "char_end": entity["char_end"] - char_start,
+                "source": entity["source"],
+                "qid": (
+                    entity.get("predicted_entity", {}).get("wikidata_entity_id")
+                    or entity.get("qcode", "")
+                ),
             }
             for entity in entities
         ]
-    
-    def _get_metadata(self) -> Dict[str, Any]:
-        def _load_metadata(file_path: str) -> list[Dict[str, Any]]:
-            """Loads metadata from a compressed CSV file and parses entities."""
-            column_names = ['start', 'end', 'id', 'src', 'loc', 'title', 'entities']
-            df = pd.read_csv(file_path, names=column_names)
-            return df.to_dict(orient='records')
 
-        metadata = {
-            path: {
-                "metadata_path": (metadata_path := os.path.join(os.path.dirname(path), os.path.basename(path).replace(".npy", ".csv.gz"))),
-                "metadata": _load_metadata(metadata_path)
+    def _load_metadata(self) -> Dict[PathOrStr, Any]:
+        headers = ['start', 'end', 'id', 'src', 'loc', 'title', 'entities', 'offsets']
+        metadata = {}
+
+        metadata_dir = self.work_dir / "dataset-metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+
+        for path in tqdm(self.paths, desc="Loading metadata"):
+            metadata_path = os.path.join(
+                os.path.dirname(path),
+                os.path.basename(path).replace(".npy", ".csv") #".csv".gz
+            )
+            index_path = self._get_metadata_index_path(metadata_path)
+            metadata[path] = {
+                "metadata_path": metadata_path,
+                "metadata": KASMetadata(metadata_path, index_path, headers)
             }
-            for path in tqdm(self.paths)
-        }
 
         return metadata
+
+    def _get_metadata_index_path(self, path: PathOrStr) -> Path:
+        sha256_hash = hashlib.sha256()
+        sha256_hash.update(str(path).encode())
+        sha256_hash.update(str(get_file_size(path)).encode())
+        path_hash = sha256_hash.hexdigest()
+        return self.work_dir / "dataset-metadata" / f"metadata-{path_hash}.npy"
 
     def _read_chunk_indices(self, path: PathOrStr, index: int) -> Tuple[int, int]:
         indices_path = self._get_document_indices_path(path)
@@ -1478,7 +1560,7 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         )
         start_idx, end_idx = indices
         return int(start_idx), int(end_idx)
-    
+
     def __getitem__(self, index: int) -> Dict[str, Any]:
         index = int(index)  # in case this is a numpy int type.
         pos_index = index if index >= 0 else len(self) + index
@@ -1502,13 +1584,9 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         input_ids = load_array_slice_into_tensor(path, start_idx, end_idx, self.dtype)
 
         out: Dict[str, Any] = {"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}
-
         if self._include_instance_metadata:
             # Find metadata entry matching start_idx and end_idx
-            metadata = next(
-                (m for m in self.metadata[path]["metadata"] if start_idx >= m["start"] and end_idx <= m["end"]),
-                None
-            )
+            metadata = self.metadata[path]["metadata"].get_for_span(start_idx, end_idx)
             
             if metadata is None:
                 raise ValueError(
@@ -1519,10 +1597,12 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
             metadata = deepcopy(metadata)
             doc_start_idx = metadata["start"]
             chunk_start_idx, chunk_end_idx = start_idx - doc_start_idx, end_idx - doc_start_idx
-            metadata["entities"] = self._get_entities_within_range(metadata, chunk_start_idx, chunk_end_idx)
+            chunk_start_char = metadata['offsets'][chunk_start_idx][0]
+            
+            metadata["entities"] = self._get_entities_within_range(metadata['entities'], chunk_start_idx, chunk_end_idx, chunk_start_char)
+            del metadata["offsets"]
             
             out["metadata"] = metadata
-        
 
         return out
     
@@ -1999,6 +2079,7 @@ class NumpyDatasetConfig(Config):
                 dtype=self.get_dtype(),
                 metadata=metadata,
                 include_instance_metadata=self.include_instance_metadata,
+                work_dir=Path(self.work_dir) if self.work_dir is not None else None,
             )
         else:
             raise NotImplementedError(self.name)

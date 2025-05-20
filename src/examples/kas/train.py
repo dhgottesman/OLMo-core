@@ -68,31 +68,33 @@ from functools import cached_property
 
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
+from pathlib import Path
+
 
 # from metrics import MetricsLogger
 
 
-@dataclass
-class BatchMetricCallback(Callback):
-    """
-    Adds batch metrics.
-    """
+# @dataclass
+# class BatchMetricCallback(Callback):
+#     """
+#     Adds batch metrics.
+#     """
 
-    def pre_train(self):
-        self.logger = MetricsLogger(self.trainer.save_folder)
-        self.batch_metrics = self.logger.load_batch_metrics()
-        self.dataset_metrics = self.logger.load_dataset_metrics()
+#     def pre_train(self):
+#         self.logger = MetricsLogger(self.trainer.save_folder)
+#         self.batch_metrics = self.logger.load_batch_metrics()
+#         self.dataset_metrics = self.logger.load_dataset_metrics()
 
-    def post_step(self):
-        if get_rank() != 0:
-            return
-        metrics = self.batch_metrics[self.step]
-        for name, value in metrics.items():
-            self.trainer.record_metric(f"train/{name}", value)
-            if name in self.dataset_metrics:
-                value /= self.dataset_metrics[name]
-                value = round(value, 4)
-                self.trainer.record_metric(f"train/{name}_relative", value)
+#     def post_step(self):
+#         if get_rank() != 0:
+#             return
+#         metrics = self.batch_metrics[self.step]
+#         for name, value in metrics.items():
+#             self.trainer.record_metric(f"train/{name}", value)
+#             if name in self.dataset_metrics:
+#                 value /= self.dataset_metrics[name]
+#                 value = round(value, 4)
+#                 self.trainer.record_metric(f"train/{name}_relative", value)
 
 @dataclass
 class ExperimentConfig(Config):
@@ -112,10 +114,20 @@ def set_random_seeds(seed: int):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def build_config(run_name: str, overrides: List[str]) -> ExperimentConfig:
+def build_config(run_name: str, model_name: str, overrides: List[str]) -> ExperimentConfig:
     tokenizer_config = TokenizerConfig.dolma2()
 
-    model_config = TransformerConfig.olmo2_1B(
+    match model_name:
+        case "olmo2_190M":
+            build_config = TransformerConfig.olmo2_190M
+        case "olmo2_600M":
+            build_config = TransformerConfig.olmo2_600M
+        case "olmo2_1B":
+            build_config = TransformerConfig.olmo2_1B
+        case _:
+            raise ValueError(f"Unknown model name: {model_name}")
+
+    model_config = build_config(
         vocab_size=tokenizer_config.padded_vocab_size(),  # a little bigger than actual vocab size to make it a multiple of 128
         compile=True,
         fused_ops=False,
@@ -132,15 +144,16 @@ def build_config(run_name: str, overrides: List[str]) -> ExperimentConfig:
         ],
     )
 
+    work_dir = Path(run_name, "dataset-cache")
     dataset_config = NumpyDatasetConfig.glob(
-        "/home/morg/students/gottesman3/knowledge-analysis-suite/dolma/python/wikipedia_vsl/part*.npy",  # can be globs
+        "/home/morg/students/gottesman3/knowledge-analysis-suite/dolma/python/final_tokenizations_with_offsets/no_special/*.npy",  # can be globs
         name=NumpyDatasetType.kas_vsl,
         max_sequence_length=2048,
         min_sequence_length=64,
         vsl_curriculum=VSLCurriculumConfig(name=VSLCurriculumType.grow_p2, num_cycles=8, balanced=False),
         tokenizer=tokenizer_config,
-        work_dir=os.path.join(run_name, "dataset-cache"),
-        include_instance_metadata=True,
+        work_dir=str(work_dir),
+        include_instance_metadata=False,
     )
 
     data_loader_config = NumpyDataLoaderConfig(
@@ -150,9 +163,11 @@ def build_config(run_name: str, overrides: List[str]) -> ExperimentConfig:
         prefetch_factor = 8,
     )
 
+    save_folder = Path(run_name, model_name)
+    save_folder.mkdir(parents=True, exist_ok=True)
     trainer_config = (
         TrainerConfig(
-            save_folder=f"{run_name}",
+            save_folder=str(save_folder),
             rank_microbatch_size=4 * 2048, #16 * 1024,
             save_overwrite=True,
             metrics_collect_interval=1,
@@ -212,8 +227,8 @@ def build_config(run_name: str, overrides: List[str]) -> ExperimentConfig:
         trainer=trainer_config,
     ).merge(overrides)
 
-def main(run_name: str, overrides: List[str]):
-    config = build_config(run_name, overrides)
+def main(run_name: str, model_name: str, overrides: List[str]):
+    config = build_config(run_name, model_name, overrides)
 
     # Set RNG states on all devices.
     seed_all(config.init_seed)
@@ -224,31 +239,34 @@ def main(run_name: str, overrides: List[str]):
     # Build the world mesh, if needed.
     world_mesh = config.model.build_mesh(device=device)
 
-    # # Build components.
-    # model = config.model.build(
-    #     init_device="meta",
-    #     device=device,
-    #     max_seq_len=config.dataset.sequence_length,
-    #     mesh=world_mesh,
-    # )
+    # Build components.
+    model = config.model.build(
+        init_device="meta",
+        device=device,
+        max_seq_len=config.dataset.sequence_length,
+        mesh=world_mesh,
+    )
 
-    # optim = config.optim.build(model)
+    optim = config.optim.build(model)
     dataset = config.dataset.build()
-    data_loader = config.data_loader.build(dataset, mesh=world_mesh)
+
+    data_loader = config.data_loader.build(dataset, mesh=world_mesh,
+)
     # data_loader.reshuffle(1)
-    # batch = None
-    # for batch in data_loader:
+    # for i, batch in enumerate(data_loader):
     #     print(batch)
-    #     break
-    # trainer = config.trainer.build(model, optim, data_loader, mesh=world_mesh)
+    #     if i == 1:
+    #         break
 
-    # # Save config to W&B and each checkpoint dir.
-    # config_dict = config.as_config_dict()
-    # cast(WandBCallback, trainer.callbacks["wandb"]).config = config_dict
-    # cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config_dict
+    trainer = config.trainer.build(model, optim, data_loader, mesh=world_mesh)
 
-    # # Train.
-    # trainer.fit()
+    # Save config to W&B and each checkpoint dir.
+    config_dict = config.as_config_dict()
+    cast(WandBCallback, trainer.callbacks["wandb"]).config = config_dict
+    cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config_dict
+
+    # Train.
+    trainer.fit()
 
 
 if __name__ == "__main__":
@@ -256,11 +274,10 @@ if __name__ == "__main__":
         print(f"Usage: python {sys.argv[0]} run_name [OVERRIDES...]")
         sys.exit(1)
 
-    run_name, *overrides = sys.argv[1:]
-    debug = any("debug" in o for o in overrides)
-    overrides = [o for o in overrides if "debug" not in o]
-    prepare_training_environment(debug=debug)
+    run_name, model_name, *overrides = sys.argv[1:]
+    print(f"Run name: {run_name}")
+    prepare_training_environment()
     try:
-        main(run_name, overrides=overrides)
+        main(run_name, model_name, overrides=overrides)
     finally:
         teardown_training_environment()
