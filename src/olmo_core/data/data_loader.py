@@ -456,7 +456,7 @@ class NumpyDataLoaderBase(DataLoaderBase):
             pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
             prefetch_factor=self.prefetch_factor,
             persistent_workers=True,
-            timeout=120,
+            timeout=1200,
         )
 
     def _get_dataset_item(self, idx: int) -> Dict[str, Any]:

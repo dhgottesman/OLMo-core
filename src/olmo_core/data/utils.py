@@ -317,6 +317,9 @@ def iter_batched(
     if batch:
         yield tuple(batch)
 
+def next_power_of_2(x):
+    return 1 << (int(x) - 1).bit_length()  # Bitwise trick to find the next power of 2
+
 def iter_batched_kas(
     iterable: Iterable[Dict[str, Any]], batch_num_tokens: int
 ) -> Iterable[Tuple[Dict[str, Any], ...]]:
@@ -324,7 +327,7 @@ def iter_batched_kas(
     tokens = 0
     shape: Optional[Tuple[int, ...]] = None
     for x in iterable:
-        x_num_tokens = x["input_ids"].numel()
+        x_num_tokens = next_power_of_2(x["input_ids"].numel())
         assert x_num_tokens <= batch_num_tokens, f"{x_num_tokens} > {batch_num_tokens}"
 
         if (tokens + x_num_tokens) > batch_num_tokens:
@@ -446,13 +449,13 @@ def bucket_documents_kas(
 
     total_og_docs = 0
     indices = []
-    for doc_idx, (start_idx, end_idx) in tqdm(enumerate(iter_document_indices(path, eos_token_id=eos_token_id, dtype=dtype)), total=len(metadata)):
+    for doc_idx, (start_idx, end_idx) in tqdm(enumerate(iter_document_indices(path, use_array_if_local=False, eos_token_id=eos_token_id, dtype=dtype)), total=len(metadata)):
         # Get entities for the document, adjusting indices to absolute offsets
-        entities = literal_eval(metadata[doc_idx]["entities"])
+        entities = metadata[doc_idx]["entities"]
         entities = [
             {
-                "start": entity["entity_token_start"] + start_idx,
-                "end": entity["entity_token_end"] + start_idx
+                "start": entity["tok_start"] + start_idx,
+                "end": entity["tok_end"] + start_idx
             }
             for entity in entities
         ]
@@ -479,10 +482,15 @@ def bucket_documents_kas(
                 while any(entity["start"] < chunk_end < entity["end"] for entity in entities):
                     chunk_end -= 1
 
-                # Daniela, remove this when the metadata is fixed.
+                # Sometimes (not often) an entity is very long (usually because of coref or entity linking).
                 if chunk_end == start_idx:
-                    # Reset remaining_length so we break out of the outer loop and continue to the next document.
-                    # No entity should be so long... Right now this happens when we incorrectly identify Files as entities.
+                    if remaining_length > max_sequence_length:
+                        print(f"Warning: Path {path} Document {doc_idx} is too long. Skipping {remaining_length} tokens.")
+                    else:
+                        # Chunk the rest of the document.
+                        indices.append(start_idx)
+                        indices.append(end_idx)
+
                     remaining_length = 0
                     break                    
 

@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 
 WANDB_API_KEY_ENV_VAR = "WANDB_API_KEY"
 
+os.environ[WANDB_API_KEY_ENV_VAR] = "507c1b87f60d6922a9ea243589deb86f3bce5c0f"
 
 @dataclass
 class WandBCallback(Callback):
