@@ -70,7 +70,7 @@ import torch._dynamo
 torch._dynamo.config.suppress_errors = True
 from pathlib import Path
 
-
+from olmo_core.train.common import Duration
 # from metrics import MetricsLogger
 
 
@@ -114,10 +114,12 @@ def set_random_seeds(seed: int):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def build_config(run_name: str, model_name: str, overrides: List[str]) -> ExperimentConfig:
+def build_config(run_name: str, model_name: str, epochs: int, overrides: List[str]) -> ExperimentConfig:
     tokenizer_config = TokenizerConfig.dolma2()
 
     match model_name:
+        case "olmo2_170M":
+            build_config = TransformerConfig.olmo2_170M
         case "olmo2_190M":
             build_config = TransformerConfig.olmo2_190M
         case "olmo2_600M":
@@ -138,7 +140,7 @@ def build_config(run_name: str, model_name: str, overrides: List[str]) -> Experi
     )
 
     optim_config = AdamWConfig(
-        lr=1e-3,
+        lr=9.7e-4, #1e-3,
         group_overrides=[
             OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
         ],
@@ -157,13 +159,14 @@ def build_config(run_name: str, model_name: str, overrides: List[str]) -> Experi
     )
 
     data_loader_config = NumpyDataLoaderConfig(
-        global_batch_size=64 * 2048, # 256 * 1024,
+        global_batch_size=64 * 2048,#524288, #64 * 2048, #, #64 * 2048, # 256 * 1024,
         seed=0,
         num_workers=4,
         prefetch_factor = 8,
     )
 
-    save_folder = Path(run_name, model_name)
+    max_duration = Duration.steps(27416 * epochs)  # 27416 steps is ~1 epoch on the full dataset
+    save_folder = Path(run_name, f"{model_name}_{optim_config.lr}_{data_loader_config.global_batch_size}_{max_duration.value}_steps")
     save_folder.mkdir(parents=True, exist_ok=True)
     trainer_config = (
         TrainerConfig(
@@ -172,17 +175,18 @@ def build_config(run_name: str, model_name: str, overrides: List[str]) -> Experi
             save_overwrite=True,
             metrics_collect_interval=1,
             cancel_check_interval=5,
+            max_duration=max_duration,  # 27416 steps is ~1 epoch on the full dataset
             load_key_mapping={
                 # For backwards compatibility when loading older checkpoints.
                 "lm_head.w_out.weight": "w_out.weight",
                 "lm_head.norm.weight": "norm.weight",
             },
         )
-        .with_callback("lr_scheduler", SchedulerCallback(scheduler=CosWithWarmup(warmup_steps=100)))
+        .with_callback("lr_scheduler", SchedulerCallback(scheduler=CosWithWarmup(warmup_steps=1000)))
         .with_callback(
             "seq_len_scheduler",
             SequenceLengthSchedulerCallback(
-                min_sequence_length=128, warmup_steps=100, enabled=False
+                min_sequence_length=64, warmup_steps=100, enabled=False
             ),
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
@@ -198,7 +202,7 @@ def build_config(run_name: str, model_name: str, overrides: List[str]) -> Experi
         .with_callback(
             "wandb",
             WandBCallback(
-                name=run_name,
+                name=str(save_folder),
                 cancel_check_interval=10,
                 enabled=True,  # change to true to enable
             ),
@@ -227,8 +231,9 @@ def build_config(run_name: str, model_name: str, overrides: List[str]) -> Experi
         trainer=trainer_config,
     ).merge(overrides)
 
-def main(run_name: str, model_name: str, overrides: List[str]):
-    config = build_config(run_name, model_name, overrides)
+def main(run_name: str, model_name: str, epochs: int, overrides: List[str]):
+    config = build_config(run_name, model_name, epochs, overrides)
+    print(config)
 
     # Set RNG states on all devices.
     seed_all(config.init_seed)
@@ -271,13 +276,14 @@ def main(run_name: str, model_name: str, overrides: List[str]):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: python {sys.argv[0]} run_name [OVERRIDES...]")
+        print(f"Usage: python {sys.argv[0]} run_name epochs [OVERRIDES...]")
         sys.exit(1)
 
-    run_name, model_name, *overrides = sys.argv[1:]
-    print(f"Run name: {run_name}")
+    run_name, model_name, epochs, *overrides = sys.argv[1:]
+    epochs = int(epochs)
+    print(f"Run name: {run_name} epochs {epochs}")
     prepare_training_environment()
     try:
-        main(run_name, model_name, overrides=overrides)
+        main(run_name, model_name, epochs, overrides=overrides)
     finally:
         teardown_training_environment()
