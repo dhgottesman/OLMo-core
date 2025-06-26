@@ -44,6 +44,7 @@ from ..distributed.utils import barrier, get_fs_local_rank, get_rank, get_world_
 from ..exceptions import OLMoConfigurationError
 from ..utils import get_default_device, roundrobin, threaded_generator
 from .collator import DataCollator
+from .kas_collator import KASDataCollator
 from .numpy_dataset import (
     NumpyDatasetBase,
     NumpyDatasetType,
@@ -920,7 +921,7 @@ class NumpyDataLoaderConfig(Config):
         self,
         dataset: NumpyDatasetBase,
         *,
-        collator: Optional[DataCollator] = None,
+        collator: Optional[DataCollator | KASDataCollator] = None,
         mesh: Optional[DeviceMesh] = None,
         dp_process_group: Optional[dist.ProcessGroup] = None,
     ) -> NumpyDataLoaderBase:

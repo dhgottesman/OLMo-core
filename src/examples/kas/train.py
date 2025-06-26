@@ -20,8 +20,10 @@ from olmo_core.data import (
     NumpyDatasetConfig,
     NumpyDatasetType,
     TokenizerConfig,
-    DataCollator
+    DataCollator,
+    KASDataCollator
 )
+
 from olmo_core.data.numpy_dataset import (
     VSLCurriculumType,
     VSLCurriculumConfig,
@@ -114,7 +116,7 @@ def set_random_seeds(seed: int):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def build_config(run_name: str, model_name: str, epochs: int, overrides: List[str]) -> ExperimentConfig:
+def build_config(run_name: str, model_name: str, epochs: int, peak_lr: float, global_batch_size: int, weight_decay: float, rank_batch_size: int, overrides: List[str], include_instance_metadata: Optional[bool] = False) -> ExperimentConfig:
     tokenizer_config = TokenizerConfig.dolma2()
 
     match model_name:
@@ -140,9 +142,9 @@ def build_config(run_name: str, model_name: str, epochs: int, overrides: List[st
     )
 
     optim_config = AdamWConfig(
-        lr=9.7e-4, #1e-3,
+        lr=peak_lr,
         group_overrides=[
-            OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
+            OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=weight_decay))
         ],
     )
 
@@ -155,23 +157,23 @@ def build_config(run_name: str, model_name: str, epochs: int, overrides: List[st
         vsl_curriculum=VSLCurriculumConfig(name=VSLCurriculumType.grow_p2, num_cycles=8, balanced=False),
         tokenizer=tokenizer_config,
         work_dir=str(work_dir),
-        include_instance_metadata=False,
+        include_instance_metadata=include_instance_metadata,
     )
 
     data_loader_config = NumpyDataLoaderConfig(
-        global_batch_size=64 * 2048,#524288, #64 * 2048, #, #64 * 2048, # 256 * 1024,
+        global_batch_size=global_batch_size,
         seed=0,
         num_workers=4,
-        prefetch_factor = 8,
+        prefetch_factor=8,
     )
 
-    max_duration = Duration.steps(27416 * epochs)  # 27416 steps is ~1 epoch on the full dataset
-    save_folder = Path(run_name, f"{model_name}_{optim_config.lr}_{data_loader_config.global_batch_size}_{max_duration.value}_steps")
+    max_duration = Duration.epochs(epochs)
+    save_folder = Path(run_name, f"{model_name}_{optim_config.lr}_{data_loader_config.global_batch_size}_{weight_decay}_{max_duration.value}")
     save_folder.mkdir(parents=True, exist_ok=True)
     trainer_config = (
         TrainerConfig(
             save_folder=str(save_folder),
-            rank_microbatch_size=4 * 2048, #16 * 1024,
+            rank_microbatch_size=rank_batch_size,
             save_overwrite=True,
             metrics_collect_interval=1,
             cancel_check_interval=5,
@@ -231,9 +233,9 @@ def build_config(run_name: str, model_name: str, epochs: int, overrides: List[st
         trainer=trainer_config,
     ).merge(overrides)
 
-def main(run_name: str, model_name: str, epochs: int, overrides: List[str]):
-    config = build_config(run_name, model_name, epochs, overrides)
-    print(config)
+def main(run_name: str, model_name: str, epochs: int, peak_lr: float, global_batch_size: int, weight_decay: float, rank_batch_size: int, overrides: List[str]):
+    config = build_config(run_name, model_name, epochs, peak_lr, global_batch_size, weight_decay, rank_batch_size, overrides)
+    print(config, flush=True)
 
     # Set RNG states on all devices.
     seed_all(config.init_seed)
@@ -255,8 +257,7 @@ def main(run_name: str, model_name: str, epochs: int, overrides: List[str]):
     optim = config.optim.build(model)
     dataset = config.dataset.build()
 
-    data_loader = config.data_loader.build(dataset, mesh=world_mesh,
-)
+    data_loader = config.data_loader.build(dataset, collator=KASDataCollator(pad_token_id=dataset.pad_token_id, rank_batch_size=rank_batch_size), mesh=world_mesh)
     # data_loader.reshuffle(1)
     # for i, batch in enumerate(data_loader):
     #     print(batch)
@@ -275,15 +276,19 @@ def main(run_name: str, model_name: str, epochs: int, overrides: List[str]):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(f"Usage: python {sys.argv[0]} run_name epochs [OVERRIDES...]")
+    if len(sys.argv) < 7:
+        print(f"Usage: python {sys.argv[0]} run_name model_name epochs peak_lr global_batch_size weight_decay rank_batch_size [OVERRIDES...]")
         sys.exit(1)
 
-    run_name, model_name, epochs, *overrides = sys.argv[1:]
+    run_name, model_name, epochs, peak_lr, global_batch_size, weight_decay, rank_batch_size, *overrides = sys.argv[1:]
     epochs = int(epochs)
-    print(f"Run name: {run_name} epochs {epochs}")
+    peak_lr = float(peak_lr)
+    global_batch_size = int(global_batch_size)
+    weight_decay = float(weight_decay)
+    rank_batch_size = int(rank_batch_size)
+    print(f"Run name: {run_name} epochs {epochs} peak_lr {peak_lr} global_batch_size {global_batch_size} weight_decay {weight_decay} rank_batch_size {rank_batch_size} overrides {overrides}", flush=True)
     prepare_training_environment()
     try:
-        main(run_name, model_name, epochs, overrides=overrides)
+        main(run_name, model_name, epochs, peak_lr, global_batch_size, weight_decay, rank_batch_size, overrides)
     finally:
         teardown_training_environment()

@@ -38,6 +38,7 @@ from .numpy_dataset import (
 from .tokenizer import TokenizerConfig, TokenizerName
 from .types import NumpyDatasetDType, NumpyDatasetType
 
+from .kas_collator import KASDataCollator
 __all__ = [
     "NumpyDatasetBase",
     "NumpyFSLDataset",
@@ -64,4 +65,5 @@ __all__ = [
     "NumpyFSLDataLoader",
     "NumpyVSLDataLoader",
     "NumpyDataLoaderConfig",
+    "KASDataCollator",
 ]
