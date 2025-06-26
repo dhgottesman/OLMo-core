@@ -1465,7 +1465,7 @@ class KASMetadata:
             for key in ['start', 'end', 'id', 'loc']:
                 record[key] = int(record[key])
             # Convert string representations of lists to actual lists
-            record["entities"] = literal_eval(record["entities"])
+            record["entities"] = json.loads(record["entities"])
             record["offsets"] = literal_eval(record["offsets"])
             return record
         
@@ -1495,7 +1495,7 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         self.work_dir = work_dir
         self.metadata = self._load_metadata()
 
-    def _get_entities_within_range(self, entities: List[Dict[str, Any]], tok_start: int, tok_end: int, char_start: int) -> List[Dict[str, str]]:
+    def _get_entities_within_range(self, entities: List[Dict[str, Any]], char_start: int, char_end: int) -> List[Dict[str, str]]:
         """
         Extracts entities that fall within the given start and end positions.
         
@@ -1504,27 +1504,18 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         :param end: End position.
         :return: List of entities within the given range.
         """
+        # char_end >= entity["char_end"] because both are non-inclusive
         entities = [
             entity for entity in entities
-            if tok_start <= entity["tok_start"] and tok_end >= entity["tok_end"]
+            if char_start <= entity["char_start"] and char_end >= entity["char_end"]
         ]
-        # Update token offsets to be relative to the chunk.
-        return [
-            {
-                "text": entity["text"],
-                "name": entity.get("name", ""),
-                "tok_start": entity["tok_start"] - tok_start,
-                "tok_end": entity["tok_end"] - tok_start,
-                "char_start": entity["char_start"] - char_start,
-                "char_end": entity["char_end"] - char_start,
-                "source": entity["source"],
-                "qid": (
-                    entity.get("predicted_entity", {}).get("wikidata_entity_id")
-                    or entity.get("qcode", "")
-                ),
-            }
-            for entity in entities
-        ]
+        
+        # Update char offsets to be relative to the chunk.
+        for entity in entities:
+            entity["char_start"] = entity["char_start"] - char_start
+            entity["char_end"] = entity["char_end"] - char_start
+        
+        return entities
 
     def _load_metadata(self) -> Dict[PathOrStr, Any]:
         headers = ['start', 'end', 'id', 'src', 'loc', 'title', 'entities', 'offsets']
@@ -1536,7 +1527,7 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         for path in tqdm(self.paths, desc="Loading metadata"):
             metadata_path = os.path.join(
                 os.path.dirname(path),
-                os.path.basename(path).replace(".npy", ".csv") #".csv".gz
+                os.path.basename(path).replace(".npy", "_new_2.csv") #".csv".gz
             )
             index_path = self._get_metadata_index_path(metadata_path)
             metadata[path] = {
@@ -1598,8 +1589,9 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
             doc_start_idx = metadata["start"]
             chunk_start_idx, chunk_end_idx = start_idx - doc_start_idx, end_idx - doc_start_idx
             chunk_start_char = metadata['offsets'][chunk_start_idx][0]
-            
-            metadata["entities"] = self._get_entities_within_range(metadata['entities'], chunk_start_idx, chunk_end_idx, chunk_start_char)
+            chunk_end_char = metadata['offsets'][min(chunk_end_idx, len(metadata['offsets'])) - 1][1]
+            # print(metadata["id"], chunk_start_char, chunk_end_char)
+            metadata["entities"] = self._get_entities_within_range(metadata['entities'], chunk_start_char, chunk_end_char)#chunk_start_idx, chunk_end_idx, chunk_start_char)
             del metadata["offsets"]
             
             out["metadata"] = metadata
