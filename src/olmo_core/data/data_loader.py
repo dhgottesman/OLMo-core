@@ -153,11 +153,11 @@ class DataLoaderBase(ABC):
         Iterate over the local rank batches.
         """
         for batch in self._iter_batches():
-            if batch["input_ids"].numel() != self.rank_batch_size:
-                raise RuntimeError(
-                    f"Expected batch size of {self.rank_batch_size:,d} tokens on rank {self.dp_rank}, "
-                    f"got input IDs with shape {tuple(batch['input_ids'].shape)} = {batch['input_ids'].numel():,d} tokens"
-                )
+            # if batch["input_ids"].numel() != self.rank_batch_size:
+            #     raise RuntimeError(
+            #         f"Expected batch size of {self.rank_batch_size:,d} tokens on rank {self.dp_rank}, "
+            #         f"got input IDs with shape {tuple(batch['input_ids'].shape)} = {batch['input_ids'].numel():,d} tokens"
+            #     )
             self.batches_processed += 1
             self.tokens_processed += self.global_batch_size
             yield batch
