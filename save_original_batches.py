@@ -1,8 +1,6 @@
-import pickle
 import os
 import sys
 from pathlib import Path
-import torch
 import numpy as np
 from tqdm import tqdm
 
@@ -35,82 +33,30 @@ os.environ["HF_TOKENIZERS_CACHE"] = os.path.join(cache_base, "tokenizers")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 from olmo_eval import HFTokenizer
-def save_checkpoint(processed_batches, all_indices, checkpoint_file="/home/joberant/NLP_2425b/shirab6/knowledge-analysis-suite/OLMo-core/batch_indices_checkpoint.pkl"):
-    """Save current progress to checkpoint file"""
-    checkpoint_data = {
-        'processed_batches': processed_batches,
-        'all_indices': all_indices
-    }
-    with open(checkpoint_file, 'wb') as f:
-        pickle.dump(checkpoint_data, f)
 
-def load_checkpoint(checkpoint_file="/home/joberant/NLP_2425b/shirab6/knowledge-analysis-suite/OLMo-core/batch_indices.pkl"):
-    """Load checkpoint if it exists"""
-    if os.path.exists(checkpoint_file):
-        with open(checkpoint_file, 'rb') as f:
-            return pickle.load(f)
-    return {'processed_batches': 0, 'all_indices': []}
 
-def save_batch_indices(dataloader, output_file='/home/joberant/NLP_2425b/shirab6/knowledge-analysis-suite/OLMo-core/batch_indices.pkl'):
-    """
-    Iterate through a DataLoader and save all batch['index'] values to a .pkl file.
-    
-    Args:
-        dataloader: DataLoader object
-        output_file: Path to save the .pkl file
-    """
-    # Set up checkpoint file path
-    checkpoint_file = output_file.replace('.pkl', '_checkpoint.pkl')
-    
-    # Load existing checkpoint if available
-    checkpoint_data = load_checkpoint(checkpoint_file)
-    start_idx = checkpoint_data['processed_batches']
-    all_indices = checkpoint_data['all_indices']
-    
-    if start_idx > 0:
-        print(f"Resuming from batch {start_idx} (found existing checkpoint)")
-    
+def save_all_batches(dataloader, output_file='/home/joberant/NLP_2425b/shirab6/knowledge-analysis-suite/OLMo-core/batch_indices.npy'):
+    all_batches = []
+
     try:
-        # Iterate through the dataloader
-        for i, batch in enumerate(tqdm(dataloader, desc="Saving batch indices", initial=start_idx)):
-            
-            # Skip batches we've already processed
-            if i < start_idx:
-                continue
-                
-            batch_indices = batch['index']
-            
-            # Convert to numpy if it's a tensor
-            if torch.is_tensor(batch_indices):
-                batch_indices = batch_indices.numpy()
-            
-            all_indices.append(batch_indices)
-            
-            # Save checkpoint every 1000 batches to minimize I/O overhead
-            if (i + 1) % 1000 == 0:
-                save_checkpoint(i + 1, all_indices, checkpoint_file)
-                print(f"Checkpoint saved at batch {i + 1}")
+        for batch in tqdm(dataloader, desc="Saving batch indices"):
+            all_batches.append(batch["index"])
         
-        # Save to .pkl file
-        with open(output_file, 'wb') as f:
-            pickle.dump(all_indices, f)
-        
-        print(f"Saved {len(all_indices)} indices to {output_file}")
-        
-        # Clean up checkpoint file on successful completion
-        if os.path.exists(checkpoint_file):
-            os.remove(checkpoint_file)
-            print("Checkpoint file cleaned up")
-        
-        return all_indices
-        
+        np.save(output_file, np.array(all_batches, dtype=object))  # variable-length rows
+
+    
     except Exception as e:
         # Save checkpoint before crashing
-        current_batch = len(all_indices) + start_idx
-        save_checkpoint(current_batch, all_indices, checkpoint_file)
+        current_batch = len(all_batches)
+        np.save(f'/home/joberant/NLP_2425b/shirab6/knowledge-analysis-suite/OLMo-core/batch_indices_checkpoint_{current_batch}.npy', np.array(all_batches, dtype=object))  # variable-length rows
+
         print(f"Error occurred at batch {current_batch}. Checkpoint saved.")
         print(f"To resume, simply run the script again.")
         raise
+        
+
+        
+
 
 if __name__ == "__main__":
 
@@ -150,4 +96,4 @@ if __name__ == "__main__":
     dataloader.reshuffle(1)
 
     print("Iterating over the batches")
-    save_batch_indices(dataloader)
+    save_all_batches(dataloader)
