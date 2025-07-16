@@ -1487,13 +1487,15 @@ class KASMetadata:
         return None  # No containing interval found)
 
 class NumpyKASVSLDataset(NumpyVSLDataset):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, pronoun_spans=None, *args, **kwargs):
         work_dir = kwargs.pop("work_dir", None)
         if work_dir is not None:
             work_dir = Path(work_dir)
         super().__init__(*args, **kwargs)
         self.work_dir = work_dir
         self.metadata = self._load_metadata()
+        
+        self.pronoun_spans = pronoun_spans
 
     def _get_entities_within_range(self, entities: List[Dict[str, Any]], tok_start: int, tok_end: int, char_start: int) -> List[Dict[str, str]]:
         """
@@ -1582,6 +1584,14 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         path = self.paths[array_index]
         start_idx, end_idx = self._read_chunk_indices(path, array_local_index)
         input_ids = load_array_slice_into_tensor(path, start_idx, end_idx, self.dtype)
+
+        if self.pronoun_spans and index in self.pronoun_spans:
+            text = self.tokenizer.decode(input_ids)
+            spans = self.pronoun_spans[index]
+            for span in spans:
+                text[span["char_start"]:span["char_end"]] = span["replace_with"]
+                input_ids = self.tokenizer(text)["input_ids"]
+                input_ids = torch.tensor(input_ids.astype(np.int_), dtype=torch.long)
 
         out: Dict[str, Any] = {"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}
         if self._include_instance_metadata:

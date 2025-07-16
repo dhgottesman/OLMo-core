@@ -32,7 +32,9 @@ pyrightconfig.json
 doc/_build/
 *.swp
 .DS_Store
-
+*playground*
+*.json
+*hp*
 
 # python
 
