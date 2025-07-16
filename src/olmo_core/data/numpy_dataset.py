@@ -1488,6 +1488,7 @@ class KASMetadata:
 
 class NumpyKASVSLDataset(NumpyVSLDataset):
     def __init__(self, *args, **kwargs):
+        self.swapping_dict = kwargs.pop("swapping_dict", None)
         work_dir = kwargs.pop("work_dir", None)
         if work_dir is not None:
             work_dir = Path(work_dir)
@@ -1553,6 +1554,11 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         return int(start_idx), int(end_idx)
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
+
+        if hasattr(self, "swapping_dict") and self.swapping_dict is not None:
+            if index in self.swapping_dict:
+                index = self.swapping_dict[index]
+
         index = int(index)  # in case this is a numpy int type.
         pos_index = index if index >= 0 else len(self) + index
 
@@ -1815,6 +1821,11 @@ class NumpyDatasetConfig(Config):
         You can save a lot of time and disk space by setting this to a common directory across
         all of you runs.
     """
+    swapping_dict: Optional[Dict[int, int]] = None
+    """
+    mapping between chunk indices to be swapped.
+    """
+
 
     def validate(self):
         if self.name in (NumpyDatasetType.fsl, NumpyDatasetType.padded_fsl):
@@ -2072,6 +2083,7 @@ class NumpyDatasetConfig(Config):
                 metadata=metadata,
                 include_instance_metadata=self.include_instance_metadata,
                 work_dir=Path(self.work_dir) if self.work_dir is not None else None,
+                swapping_dict = self.swapping_dict,
             )
         else:
             raise NotImplementedError(self.name)
