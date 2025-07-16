@@ -35,6 +35,7 @@ doc/_build/
 *playground*
 *.json
 *hp*
+dataset_ordering_local_backup.ipynb
 
 # python
 
