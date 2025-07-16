@@ -1,5 +1,7 @@
 import os
 import sys
+import torch
+import gc
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
@@ -39,15 +41,23 @@ def save_all_batches(dataloader, output_file='/home/joberant/NLP_2425b/shirab6/k
     all_batches = []
 
     try:
-        for batch in tqdm(dataloader, desc="Saving batch indices"):
-            all_batches.append(batch["index"])
-        
+        for i, batch in enumerate(tqdm(dataloader, desc="Saving batch indices")):
+
+            if i < 102165:
+                continue
+            all_batches.append(batch["index"].detach().cpu().numpy())
+            del batch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
         np.save(output_file, np.array(all_batches, dtype=object))  # variable-length rows
+
 
     
     except Exception as e:
         # Save checkpoint before crashing
-        current_batch = len(all_batches)
+        current_batch = len(all_batches) + 102165
         np.save(f'/home/joberant/NLP_2425b/shirab6/knowledge-analysis-suite/OLMo-core/batch_indices_checkpoint_{current_batch}.npy', np.array(all_batches, dtype=object))  # variable-length rows
 
         print(f"Error occurred at batch {current_batch}. Checkpoint saved.")
