@@ -1557,7 +1557,15 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
 
         if hasattr(self, "swapping_dict") and self.swapping_dict is not None:
             if index in self.swapping_dict:
-                index = self.swapping_dict[index]
+                # Get the list of possible indices to swap with
+                possible_indices = self.swapping_dict[index]
+    
+                # If the list is not empty, pop an index from it
+                if possible_indices:
+                    new_index = possible_indices.pop()
+                    index = new_index 
+                else:
+                    print(f"inject list if empty for {index}")
 
         index = int(index)  # in case this is a numpy int type.
         pos_index = index if index >= 0 else len(self) + index
