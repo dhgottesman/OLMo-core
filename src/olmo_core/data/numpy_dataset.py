@@ -1628,7 +1628,7 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
             out["metadata"] = metadata
 
         if swap:
-            return (out, input_ids.numel(), orig_len)
+            return (out, input_ids.numel(), orig_len, index)
         return out
     
     def _write_document_indices(self):
