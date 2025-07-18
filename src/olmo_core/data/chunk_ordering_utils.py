@@ -83,7 +83,6 @@ def shloop(
 
     # 2. Calculate the injection span
     num_chunks = len(entity_data['chunks'])
-    #print(f"Injection span: {list(injection_points)}")
     if len(injection_points) != num_chunks:
         f"Entity {entity_data['entity_id']} expected {num_chunks} injection points, but got {len(injection_points)}."
     
@@ -95,18 +94,16 @@ def shloop(
     for len_e in se:
         for len_b in sb:
             if len_b == len_e:
-                #print(len_e, len_b)
                 chunk_id = ent_len_to_chunk[len_e]
                 batch_id = batch_len_to_id[len_b]
 
-                #print(f"Chunk {chunk_id} with length {len_e} will be swapped with batch {batch_id} with length {len_b}")
                 # get a random chunk id from the batch
                 chunk_id_from_batch = random.choice(batch_to_chunks_map[batch_id])
                 while chunk_id_from_batch in blacklist:
                     chunk_id_from_batch = random.choice(batch_to_chunks_map[batch_id])
 
-                if [chunk_id, chunk_id_from_batch] in chunks_to_batches or [chunk_id_from_batch, chunk_id] in chunks_to_batches:
-                    print(chunk_id, chunk_id_from_batch, "already in")
+                # if [chunk_id, chunk_id_from_batch] in chunks_to_batches or [chunk_id_from_batch, chunk_id] in chunks_to_batches:
+                #     print(chunk_id, chunk_id_from_batch, "already in")
                 
                 chunks_to_batches.append([chunk_id, chunk_id_from_batch])
                 chunks_to_batches.append([chunk_id_from_batch, chunk_id])
@@ -126,8 +123,8 @@ def shloop(
             while chunk_id_from_batch in blacklist:
                     chunk_id_from_batch = random.choice(batch_to_chunks_map[batch_id])
                     
-            if [chunk_id, chunk_id_from_batch] in chunks_to_batches or [chunk_id_from_batch, chunk_id] in chunks_to_batches:
-                    print(chunk_id, chunk_id_from_batch, "already in")
+            # if [chunk_id, chunk_id_from_batch] in chunks_to_batches or [chunk_id_from_batch, chunk_id] in chunks_to_batches:
+            #         print(chunk_id, chunk_id_from_batch, "already in")
                 
             chunks_to_batches.append([chunk_id, chunk_id_from_batch])
             chunks_to_batches.append([chunk_id_from_batch, chunk_id])
@@ -138,13 +135,9 @@ def shloop(
     return chunks_to_batches
 
 def create_swapping_dict_for_steps_interval(interval: int, entities, batch_to_chunks_map: dict, total_number_of_batches: int = 109672, max_chunks_per_entity: int = 100, seed: int = 0, save_file_path: str | None = None) -> dict: 
-    
+        
     injection_points = sample_injection_points(total_number_of_batches, len(entities), max_chunks_per_entity, interval, seed)
     all_injection_points_per_entity = assign_indices_to_entities(entities, injection_points, interval)
-
-    import itertools
-    inj = sorted(itertools.chain.from_iterable(all_injection_points_per_entity.values()))[:10]
-    print(inj)
 
     full_mapping = []
     blacklist = set()
@@ -175,9 +168,79 @@ def create_swapping_dict_for_steps_interval(interval: int, entities, batch_to_ch
         swapping_dict[key] = value
 
     if save_file_path:
-        with open(save_file_path, 'wb') as f:
-            pickle.dump(swapping_dict, f)
+        with open(save_file_path + f'swapping_dict_interval_{interval}.pkl', 'wb') as f1:
+            pickle.dump(swapping_dict, f1)
+        with open(save_file_path + f'injected_batched_per_entity_interval_{interval}.pkl', 'wb') as f2:
+            pickle.dump(all_injection_points_per_entity, f2)
     
     return swapping_dict
+
+
+def get_important_chunks(dataset, min_num_chunks, max_num_chunks, instance_lengths):
+    # Filter the dataset
+    filtered_dataset = dataset['train'].filter(
+        lambda example: min_num_chunks <= example['subject_num_chunks'] <= max_num_chunks
+    )   
+
+    # Create list of dictionaries with subject info and chunk lengths
+    result_list = []    
+
+    for example in filtered_dataset:
+        
+        subject_name = example['subj']
+        subject_id = example['subj_id']
+        chunks = example['subject_chunks']
+        num_chunks = example['subject_num_chunks']
+
+        chunk_lengths = instance_lengths[chunks]
+
+        # Sort chunks by their lengths (descending order)
+        if len(chunk_lengths) > 0:
+            # Create pairs of (chunk, length) and sort by length
+            chunk_length_pairs = list(zip(chunks, chunk_lengths))
+            chunk_length_pairs.sort(key=lambda x: x[1], reverse=True)
+
+            # Separate back into sorted chunks and lengths
+            sorted_chunks = [pair[0] for pair in chunk_length_pairs]
+            sorted_lengths = [pair[1] for pair in chunk_length_pairs]
+        else:
+            sorted_chunks = chunks
+            sorted_lengths = chunk_lengths
+
+        subject_dict = {
+            'entity_id': subject_id,
+            'entity_name': subject_name,
+            'num_chunks': num_chunks,
+            'chunks': sorted_chunks,
+            'chunks_lengths': sorted_lengths
+        }
+        
+        result_list.append(subject_dict)    
+
+    # Sort the list by number of chunks (descending order)
+    result_list.sort(key=lambda x: x['num_chunks'], reverse=True)
+
+    return result_list
+
+def get_disjoint_entities(subject_dicts, seed = 406):
+    used_chunks = set()
+    disjoint_entities = []
+
+    random.seed(seed)
+
+    shuffled = subject_dicts.copy()
+    random.shuffle(shuffled)
+
+    for entity in shuffled:
+        entity_chunks = set(entity['chunks'])
+
+        # Check if entity has any overlapping chunk
+        if used_chunks.isdisjoint(entity_chunks):
+            disjoint_entities.append(entity)
+            used_chunks.update(entity_chunks)
+
+    return disjoint_entities
+
+
 
     
