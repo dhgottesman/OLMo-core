@@ -43,7 +43,7 @@ if __name__ == "__main__":
     # load the swapping dicts
 
     interval = 1 # change to load a different swapping dict intervals are 1, 50, 100
-    with open('/home/joberant/NLP_2425b/shirab6/knowledge-analysis-suite/OLMo-core/chunk_ordering_data/swapping_dict_interval_{interval}.pkl', 'rb') as f:
+    with open(f'/home/joberant/NLP_2425b/shirab6/knowledge-analysis-suite/OLMo-core/chunk_ordering_data/swapping_dict_interval_{interval}.pkl', 'rb') as f:
         swapping_dict = pickle.load(f)
 
 
@@ -57,7 +57,7 @@ if __name__ == "__main__":
             )   
 
     include_instance_metadata = False # Set to true when you want tp retrieve metadata, during training set this to False
-    work_dir = "/home/joberant/NLP_2425b/shirab6/knowledge-analysis-suite/OLMo-core/hp_final/dataset-cache" 
+    work_dir = "/home/joberant/NLP_2425b/shirab6/knowledge-analysis-suite/OLMo-core/hp_final_tmp/dataset-cache" 
 
 
     dataset_config = NumpyDatasetConfig.glob(
