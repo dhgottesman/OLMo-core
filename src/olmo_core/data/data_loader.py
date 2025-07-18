@@ -464,9 +464,9 @@ class NumpyDataLoaderBase(DataLoaderBase):
         item = self.dataset[idx]
         if isinstance(item, dict):
             return dict(**item, index=idx)
-        elif isinstance(item, Tuple) and len(item) == 3: # returned swapping_dict[idx] chunk instead of idx, possibly of different length
-            item, new_len, orig_len = item
-            return (dict(**item, index=idx), new_len, orig_len)
+        elif isinstance(item, Tuple) and len(item) == 4: # returned swapping_dict[idx] chunk instead of idx, possibly of different length
+            item, new_len, orig_len, new_idx = item
+            return (dict(**item, index=new_idx), new_len, orig_len)
         else:
             return {"input_ids": item, "index": idx}
 

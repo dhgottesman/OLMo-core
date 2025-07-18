@@ -437,7 +437,11 @@ sorted_keys.sort()
 from tqdm import tqdm
 
 for i, batch in tqdm(enumerate(dataloader)):
-    idxs_check = np.array_equal(batch['index'].numpy(), all_batches[i])
+    expected = all_batches[i]
+    for j,ch in enumerate(expected):
+        if ch in swapping_dict:
+            expected[j] = swapping_dict[ch]
+    idxs_check = np.array_equal(batch['index'].numpy(), expected)
     if not idxs_check:
         print(f"batch {i} failed")
         print("orig batch: ")
@@ -447,5 +451,7 @@ for i, batch in tqdm(enumerate(dataloader)):
         break
     # if i==1:
     #     print(batch['input_ids'][123])
+    #     print(batch['index'][123])
+    #     print(batch['input_ids'].shape)
     #     break
         
