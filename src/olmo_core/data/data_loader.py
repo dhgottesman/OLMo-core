@@ -464,7 +464,7 @@ class NumpyDataLoaderBase(DataLoaderBase):
         item = self.dataset[idx]
         if isinstance(item, dict):
             return dict(**item, index=idx)
-        elif isinstance(item, Tuple) and len(item) == 3:
+        elif isinstance(item, Tuple) and len(item) == 3: # returned swapping_dict[idx] chunk instead of idx, possibly of different length
             item, new_len, orig_len = item
             return (dict(**item, index=idx), new_len, orig_len)
         else:
