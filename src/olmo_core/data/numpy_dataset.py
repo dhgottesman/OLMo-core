@@ -1554,10 +1554,43 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         return int(start_idx), int(end_idx)
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
+        # if self.swapping_dict is None:
+        #     print("self.swapping_dict is None")
+        # else:
+        #     print(f"len of self.swapping_dict is {len(self.swapping_dict)}\n")
 
+        swap = False
+        # if index == 5265742:
+        #     print("&&&&&&&&&")
         if hasattr(self, "swapping_dict") and self.swapping_dict is not None:
             if index in self.swapping_dict:
+                # find orig chunk to get its len
+                index = int(index)  # in case this is a numpy int type.
+                pos_index = index if index >= 0 else len(self) + index
+
+                # The index of the array within 'self.paths'.
+                array_index: Optional[int] = None
+                # The index within the corresponding array.
+                array_local_index: Optional[int] = None
+                for i, (offset_start, offset_end) in enumerate(self.offsets):
+                    if offset_start <= pos_index < offset_end:
+                        array_index = i
+                        array_local_index = pos_index - offset_start
+                        break
+
+                if array_index is None or array_local_index is None:
+                    raise IndexError(f"{index} is out of bounds for dataset of size {len(self)}")
+
+                # Read the data from file.
+                path = self.paths[array_index]
+                start_idx, end_idx = self._read_chunk_indices(path, array_local_index)
+                input_ids = load_array_slice_into_tensor(path, start_idx, end_idx, self.dtype)
+                orig_len = input_ids.numel()
+
+                # print(f"old idx is {index} and new index is {self.swapping_dict[index]}\n", flush=True)
                 index = self.swapping_dict[index]
+                swap = True
+                
 
         index = int(index)  # in case this is a numpy int type.
         pos_index = index if index >= 0 else len(self) + index
@@ -1602,6 +1635,8 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
             
             out["metadata"] = metadata
 
+        if swap:
+            return (out, input_ids.numel(), orig_len)
         return out
     
     def _write_document_indices(self):

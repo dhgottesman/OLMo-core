@@ -326,14 +326,39 @@ def iter_batched_kas(
     batch: List[Dict[str, Any]] = []
     tokens = 0
     shape: Optional[Tuple[int, ...]] = None
+    pad_len = 0
     for x in iterable:
-        x_num_tokens = next_power_of_2(x["input_ids"].numel())
-        assert x_num_tokens <= batch_num_tokens, f"{x_num_tokens} > {batch_num_tokens}"
+        # print(f"x['index'] is {x['index']}\n")
+        swap = False
+        if not isinstance(x, dict):
+            swap = True
+            x, new_len, orig_len = x
+            # print(f"x['index'] = {x['index']}, new_len = {new_len}, orig_len = {orig_len}")
 
-        if (tokens + x_num_tokens) > batch_num_tokens:
+        # if x['index'] in [7895924]:
+        #      print(f"x['index'] is {x['index']}\n")
+        
+        # if x['index'] in [5303980, 3401112, 2619408, 5265742, 739182, 3151452]:
+        #     print(f"x['index'] is {x['index']}\n")
+            # print("here we are")
+        x_num_tokens = next_power_of_2(x["input_ids"].numel())
+        assert x_num_tokens <= batch_num_tokens, f"{x_num_tokens} > {batch_num_tokens}" # TODO Maya: would need to delete this for exp2? no
+        if swap:
+            # pad_len += max(0, new_len-orig_len)
+            # pad_len += new_len-orig_len # want to wrap a batch even if it's shorter
+            pad_len += max(0,next_power_of_2(new_len) - next_power_of_2(orig_len))
+            # pad_len = max(pad_len, 0)
+            x_num_tokens = max(next_power_of_2(orig_len), x_num_tokens)
+            
+
+
+        if (tokens + x_num_tokens) > (batch_num_tokens + pad_len):
             yield tuple(batch)
             batch.clear()
             tokens = 0
+            pad_len = 0
+            if swap:
+                pad_len = max(0,next_power_of_2(new_len) - next_power_of_2(orig_len))
 
         batch.append(x)
         tokens += x_num_tokens

@@ -464,6 +464,9 @@ class NumpyDataLoaderBase(DataLoaderBase):
         item = self.dataset[idx]
         if isinstance(item, dict):
             return dict(**item, index=idx)
+        elif isinstance(item, Tuple) and len(item) == 3:
+            item, new_len, orig_len = item
+            return (dict(**item, index=idx), new_len, orig_len)
         else:
             return {"input_ids": item, "index": idx}
 
