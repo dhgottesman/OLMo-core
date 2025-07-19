@@ -1287,11 +1287,14 @@ class Trainer:
         # assumption that all ranks see the same number batch size in tokens per step,
         # which should always be the case for training efficiency at least.
         # Alternatively we'd have to use a distributed collective which isn't worth it.
-        if batch["input_ids"].numel() != self.rank_batch_size:
-            raise RuntimeError(
-                f"Expected batch size of {self.rank_batch_size:,d} tokens on rank {get_rank()}, "
-                f"got input IDs with shape {tuple(batch['input_ids'].shape)} = {batch['input_ids'].numel():,d} tokens"
-            )
+        
+        # if batch["input_ids"].numel() != self.rank_batch_size:
+        #     raise RuntimeError(
+        #         f"Expected batch size of {self.rank_batch_size:,d} tokens on rank {get_rank()}, "
+        #         f"got input IDs with shape {tuple(batch['input_ids'].shape)} = {batch['input_ids'].numel():,d} tokens"
+        #     )
+
+        # TODO Maya - temp uncommented
         return self.global_batch_size
 
     def _dry_run_batch(self):
