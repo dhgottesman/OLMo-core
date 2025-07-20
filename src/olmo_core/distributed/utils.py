@@ -100,7 +100,9 @@ def init_distributed(backend: str = "nccl", timeout: timedelta = timedelta(minut
         # NOTE: important to do this *before* initializing the process group to avoid
         # other ranks initializing CUDA on GPU 0.
         device = torch.device(f"cuda:{int(os.environ[OLMO_LOCAL_RANK_ENV_VAR])}")
+        print(f"device is {device}")
         torch.cuda.set_device(device)
+        print(f"after torch.cuda.set_device(device)")
 
     dist.init_process_group(backend, timeout=timeout)
 

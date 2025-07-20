@@ -5,7 +5,11 @@
 #SBATCH --time=1-00:00:00
 #SBATCH --gpus=4               # Request 4 GPU
 #SBATCH --nodes=1
-#SBATCH --partition=studentkillable
+#SBATCH --account=gpu-research
+#SBATCH --partition=killable
+#SBATCH --nodelist=rack-omerl-g01
+
+nvidia-smi
 
 WANDB_API_KEY="507c1b87f60d6922a9ea243589deb86f3bce5c0f"
 
