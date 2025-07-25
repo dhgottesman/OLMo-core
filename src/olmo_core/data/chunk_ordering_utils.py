@@ -75,6 +75,35 @@ def assign_indices_to_entities(entities, injection_points, interval):
 
     return result
 
+def sample_random_injection_points(total_steps, entities, min_start_point, seed = 0):
+    if seed is not None:
+        random.seed(seed)
+    
+    total_chunks = sum(entity['num_chunks'] for entity in entities)
+    print(total_chunks)
+
+    if min_start_point > total_steps - total_chunks:
+        print(f"[Warning] Desired min_start_point {min_start_point} too large. Using minimum feasible starting point {total_steps - total_chunks}.")
+        min_start_point = min(min_start_point, total_steps - total_chunks)
+    
+    result = {}
+    valid_range = range(min_start_point, total_steps)
+    print(valid_range)
+    sampled_points = random.sample(valid_range, k=total_chunks)
+    random.shuffle(sampled_points)
+    print(sampled_points)
+
+    index = 0
+    for entity in entities:
+        num_chunks = entity["num_chunks"]
+        result[entity['subject_qid']] = sampled_points[index : index + num_chunks]
+        index += num_chunks
+
+    return result
+
+
+
+
 
 def shloop(
     injection_points: List[int],
@@ -192,7 +221,7 @@ def create_swapping_dict_for_steps_interval(interval: int, entities, batch_to_ch
     
     return swapping_dict
 
-def create_swapping_dict_for_injection_points(interval: int, entities, all_injection_points_per_entity: dict, batch_to_chunks_map: dict, save_file_path: str | None = None) -> dict: 
+def create_swapping_dict_for_injection_points(entities, all_injection_points_per_entity: dict, batch_to_chunks_map: dict, save_file_path: str | None = None, interval: int | None = None) -> dict: 
 
     full_mapping = []
     blacklist = set()
@@ -223,9 +252,15 @@ def create_swapping_dict_for_injection_points(interval: int, entities, all_injec
         swapping_dict[key] = value
 
     if save_file_path:
-        with open(save_file_path + f'swapping_dict_interval_{interval}.pkl', 'wb') as f1:
+        path_ending = ""
+        if interval:
+            path_ending = f'interval_{interval}.pkl'
+        else:
+            path_ending = '.pkl'
+
+        with open(save_file_path + 'swapping_dict' + path_ending, 'wb') as f1:
             pickle.dump(swapping_dict, f1)
-        with open(save_file_path + f'injected_batched_per_entity_interval_{interval}.pkl', 'wb') as f2:
+        with open(save_file_path + f'injected_batched_per_entity' + path_ending, 'wb') as f2:
             pickle.dump(all_injection_points_per_entity, f2)
     
     return swapping_dict
