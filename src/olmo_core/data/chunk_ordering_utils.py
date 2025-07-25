@@ -4,17 +4,19 @@ import pickle
 
 from typing import List
 
-def sample_injection_points(total_steps, num_points_to_sample, max_num_chunks, interval, seed=None):
+import random
+
+def sample_injection_points(total_steps, num_points_to_sample, max_num_chunks, interval, seed=None, min_start_point=0):
     """
-    Samples unique injection points from a valid starting range to avoid overflow 
-    when assigning chunk indices.
+    Samples unique injection points from a valid starting range, respecting a soft interval constraint.
 
     Args:
         total_steps (int): The maximum possible step value (exclusive upper bound).
         num_points_to_sample (int): Number of injection points to sample.
         max_num_chunks (int): Maximum num_chunks across all entities.
-        interval (int): Distance between chunk indices.
+        interval (int): Desired distance between chunk indices (soft constraint).
         seed (int, optional): Seed for reproducibility.
+        min_start_point (int): Minimum possible value for a valid injection point.
 
     Returns:
         List[int]: Sorted list of valid injection starting points.
@@ -22,15 +24,30 @@ def sample_injection_points(total_steps, num_points_to_sample, max_num_chunks, i
     if seed is not None:
         random.seed(seed)
 
-    max_valid_start = total_steps - (max_num_chunks - 1) * interval
-    if max_valid_start <= 0:
-        raise ValueError("Interval and chunk size too large for total steps.")
+    # Ensure min_start_point is within bounds
+    if min_start_point < 0 or min_start_point >= total_steps:
+        raise ValueError("min_start_point must be within the range [0, total_steps).")
 
-    if num_points_to_sample > max_valid_start:
+    # Compute maximum possible valid start point
+    max_valid_start = total_steps - (max_num_chunks - 1) * interval
+
+    if max_valid_start <= min_start_point:
+        # Interval is too large; compute the largest feasible one
+        max_feasible_interval = (total_steps - min_start_point) // max(max_num_chunks - 1, 1)
+        if max_feasible_interval <= 0:
+            raise ValueError("Even the largest possible interval results in overflow. Adjust total_steps or chunk size.")
+
+        print(f"[Warning] Desired interval {interval} too large. Using maximum feasible interval {max_feasible_interval}.")
+        interval = max_feasible_interval
+        max_valid_start = total_steps - (max_num_chunks - 1) * interval
+
+    valid_range = range(min_start_point, max_valid_start)
+    if num_points_to_sample > len(valid_range):
         raise ValueError("Cannot sample more injection points than available valid start points.")
 
-    sampled_points = random.sample(range(max_valid_start), k=num_points_to_sample)
+    sampled_points = random.sample(valid_range, k=num_points_to_sample)
     return sorted(sampled_points)
+
 
 
 def assign_indices_to_entities(entities, injection_points, interval):
@@ -51,10 +68,10 @@ def assign_indices_to_entities(entities, injection_points, interval):
     result = {}
 
     for entity, start in zip(entities, injection_points):
-        entity_id = entity['entity_id']
+        entity_qid = entity['subject_qid']
         num_chunks = entity['num_chunks']
         indices = [start + i * interval for i in range(num_chunks)]
-        result[entity_id] = indices
+        result[entity_qid] = indices
 
     return result
 
@@ -146,7 +163,45 @@ def create_swapping_dict_for_steps_interval(interval: int, entities, batch_to_ch
         blacklist.update(entity['chunks'])
 
     for i, important_chunk in enumerate(entities):
-        pts = all_injection_points_per_entity[important_chunk['entity_id']]
+        pts = all_injection_points_per_entity[important_chunk['subject_qid']]
+
+        # The 'important_chunk' variable is the integer you need.
+        # Pass it directly to your function.
+        res = shloop(
+            pts,
+            important_chunk,
+            batch_to_chunks_map,
+            blacklist
+        )
+
+        # add the chunks already in the injection mapping to a blacklist so they don't get sampled
+        blacklist.update(list(set([r[0] for r in res])))
+
+        # extend full mapping with the result
+        full_mapping.extend(res)
+
+    swapping_dict = {}
+    for key, value in full_mapping:
+        swapping_dict[key] = value
+
+    if save_file_path:
+        with open(save_file_path + f'swapping_dict_interval_{interval}.pkl', 'wb') as f1:
+            pickle.dump(swapping_dict, f1)
+        with open(save_file_path + f'injected_batched_per_entity_interval_{interval}.pkl', 'wb') as f2:
+            pickle.dump(all_injection_points_per_entity, f2)
+    
+    return swapping_dict
+
+def create_swapping_dict_for_injection_points(interval: int, entities, all_injection_points_per_entity: dict, batch_to_chunks_map: dict, save_file_path: str | None = None) -> dict: 
+
+    full_mapping = []
+    blacklist = set()
+
+    for entity in entities:
+        blacklist.update(entity['chunks'])
+
+    for i, important_chunk in enumerate(entities):
+        pts = all_injection_points_per_entity[important_chunk['subject_qid']]
 
         # The 'important_chunk' variable is the integer you need.
         # Pass it directly to your function.
@@ -188,7 +243,7 @@ def get_important_chunks(dataset, min_num_chunks, max_num_chunks, instance_lengt
     for example in filtered_dataset:
         
         subject_name = example['subj']
-        subject_id = example['subj_id']
+        subject_qid = example['s_uri']
         chunks = example['subject_chunks']
         num_chunks = example['subject_num_chunks']
 
@@ -208,7 +263,7 @@ def get_important_chunks(dataset, min_num_chunks, max_num_chunks, instance_lengt
             sorted_lengths = chunk_lengths
 
         subject_dict = {
-            'entity_id': subject_id,
+            'subject_qid': subject_qid,
             'entity_name': subject_name,
             'num_chunks': num_chunks,
             'chunks': sorted_chunks,
