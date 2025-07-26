@@ -327,8 +327,7 @@ def iter_batched_kas(
     tokens = 0
     shape: Optional[Tuple[int, ...]] = None
     pad_len = 0
-    for x in iterable:
-        
+    for x in iterable:     
         swap = False
         if not isinstance(x, dict):
             swap = True

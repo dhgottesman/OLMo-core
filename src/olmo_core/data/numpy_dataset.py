@@ -1604,6 +1604,11 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         path = self.paths[array_index]
         start_idx, end_idx = self._read_chunk_indices(path, array_local_index)
         input_ids = load_array_slice_into_tensor(path, start_idx, end_idx, self.dtype)
+        
+        def next_power_of_2(x):
+                return 1 << (int(x) - 1).bit_length()  # Bitwise trick to find the next power of 2
+        if swap and next_power_of_2(input_ids.numel()) > next_power_of_2(orig_len):
+            input_ids = input_ids[:next_power_of_2(orig_len)]
 
         out: Dict[str, Any] = {"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}
         if self._include_instance_metadata:

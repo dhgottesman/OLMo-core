@@ -443,15 +443,37 @@ for i, batch in tqdm(enumerate(dataloader)):
             expected[j] = swapping_dict[ch]
     idxs_check = np.array_equal(batch['index'].numpy(), expected)
     if not idxs_check:
+        print("idxs check failed")
         print(f"batch {i} failed")
         print("orig batch: ")
         print(all_batches[i])
         print("new batch: ")
         print(batch['index'])
         break
+
+    if not (batch['input_ids'].shape[0]*batch['input_ids'].shape[1] == 32768):
+        print("shape failed")
+        print(f"batch {i} failed")
+        print("orig batch: ")
+        print(all_batches[i])
+        print("new batch: ")
+        print(batch['index'])
+        break
+    
     # if i==1:
     #     print(batch['input_ids'][123])
     #     print(batch['index'][123])
     #     print(batch['input_ids'].shape)
     #     break
+
+    # if i==11:
+    #     print(batch['input_ids'][8])
+    #     print(batch['index'][8])
+    #     print(batch['input_ids'].shape)
+    #     print("*******")
+    #     print(batch['input_ids'][24])
+    #     print(batch['index'][24])
+    #     print(batch['input_ids'].shape)
+    #     break
         
+print("done")
