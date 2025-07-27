@@ -1,14 +1,17 @@
 import random
 import math
 import pickle
+import numpy as np
 
 from typing import List
 
 import random
 
-def sample_injection_points(total_steps, num_points_to_sample, max_num_chunks, interval, seed=None, min_start_point=0):
+import random
+
+def sample_injection_points_bursts(entities, total_steps, max_num_chunks, interval, seed=None, sampling_range=(0, None)):
     """
-    Samples unique injection points from a valid starting range, respecting a soft interval constraint.
+    Samples unique injection points from a valid range, respecting a soft interval constraint.
 
     Args:
         total_steps (int): The maximum possible step value (exclusive upper bound).
@@ -16,7 +19,8 @@ def sample_injection_points(total_steps, num_points_to_sample, max_num_chunks, i
         max_num_chunks (int): Maximum num_chunks across all entities.
         interval (int): Desired distance between chunk indices (soft constraint).
         seed (int, optional): Seed for reproducibility.
-        min_start_point (int): Minimum possible value for a valid injection point.
+        sampling_range (tuple): (min_start_point, max_start_point), both inclusive.
+                             If max_start_point is None, it's inferred from total_steps.
 
     Returns:
         List[int]: Sorted list of valid injection starting points.
@@ -24,29 +28,43 @@ def sample_injection_points(total_steps, num_points_to_sample, max_num_chunks, i
     if seed is not None:
         random.seed(seed)
 
-    # Ensure min_start_point is within bounds
-    if min_start_point < 0 or min_start_point >= total_steps:
-        raise ValueError("min_start_point must be within the range [0, total_steps).")
+    min_start_point, max_start_point = sampling_range
+    if max_start_point is None:
+        max_start_point = total_steps
 
-    # Compute maximum possible valid start point
-    max_valid_start = total_steps - (max_num_chunks - 1) * interval
+    # Validate range
+    if not (0 <= min_start_point < max_start_point <= total_steps):
+        raise ValueError("start_range must be within bounds and min < max <= total_steps.")
 
-    if max_valid_start <= min_start_point:
-        # Interval is too large; compute the largest feasible one
-        max_feasible_interval = (total_steps - min_start_point) // max(max_num_chunks - 1, 1)
+    # Compute max valid start based on interval and chunk size
+    hard_upper_bound = total_steps - (max_num_chunks - 1) * interval
+    effective_max = min(max_start_point, hard_upper_bound)
+
+    if effective_max <= min_start_point:
+        # Interval too large for the provided range
+        max_feasible_interval = (max_start_point - min_start_point) // max(max_num_chunks - 1, 1)
         if max_feasible_interval <= 0:
-            raise ValueError("Even the largest possible interval results in overflow. Adjust total_steps or chunk size.")
-
-        print(f"[Warning] Desired interval {interval} too large. Using maximum feasible interval {max_feasible_interval}.")
+            raise ValueError("Even the largest feasible interval doesn't fit in the specified range.")
+        
+        print(f"[Warning] Interval {interval} too large for specified range. Using maximum feasible interval {max_feasible_interval}.")
         interval = max_feasible_interval
-        max_valid_start = total_steps - (max_num_chunks - 1) * interval
+        effective_max = min(max_start_point, total_steps - (max_num_chunks - 1) * interval)
 
-    valid_range = range(min_start_point, max_valid_start)
-    if num_points_to_sample > len(valid_range):
-        raise ValueError("Cannot sample more injection points than available valid start points.")
+    valid_range = range(min_start_point, effective_max)
+    if len(entities) > len(valid_range):
+        raise ValueError("Cannot sample more injection points than available valid start points in the specified range.")
 
-    sampled_points = random.sample(valid_range, k=num_points_to_sample)
+    sampled_points = random.sample(valid_range, k=len(entities))
     return sorted(sampled_points)
+
+
+def sample_injection_points(experiment_type: str, entities, total_steps, sampling_range=(0, None), max_num_chunks=None, interval=None, seed=None):
+    if experiment_type == "BURSTS":
+        injection_points = sample_injection_points_bursts(entities, total_steps, max_num_chunks, interval, seed, sampling_range)
+        return assign_indices_to_entities(entities, injection_points, interval)
+    elif experiment_type == "RANDOM":
+        return sample_random_injection_points(total_steps, entities, sampling_range, seed)
+
 
 
 
@@ -75,34 +93,26 @@ def assign_indices_to_entities(entities, injection_points, interval):
 
     return result
 
-def sample_random_injection_points(total_steps, entities, min_start_point, seed = 0):
+def sample_random_injection_points(total_steps, entities, sampling_range=(0, None), seed = 0):
     if seed is not None:
         random.seed(seed)
-    
-    total_chunks = sum(entity['num_chunks'] for entity in entities)
-    print(total_chunks)
 
-    if min_start_point > total_steps - total_chunks:
-        print(f"[Warning] Desired min_start_point {min_start_point} too large. Using minimum feasible starting point {total_steps - total_chunks}.")
-        min_start_point = min(min_start_point, total_steps - total_chunks)
-    
+    min_point, max_point = sampling_range
+    if max_point is None:
+        max_point = total_steps
+
+    # Validate range
+    if not (0 <= min_point < max_point <= total_steps):
+        raise ValueError("Invalid sampling_range: must satisfy 0 <= min < max <= total_steps.")
+        
     result = {}
-    valid_range = range(min_start_point, total_steps)
-    print(valid_range)
-    sampled_points = random.sample(valid_range, k=total_chunks)
-    random.shuffle(sampled_points)
-    print(sampled_points)
-
-    index = 0
     for entity in entities:
         num_chunks = entity["num_chunks"]
-        result[entity['subject_qid']] = sampled_points[index : index + num_chunks]
-        index += num_chunks
+        sampled_points_per_entity = random.sample(range(min_point, max_point), k=num_chunks)
+        random.shuffle(sampled_points_per_entity)
+        result[entity['subject_qid']] = sampled_points_per_entity
 
     return result
-
-
-
 
 
 def shloop(
@@ -254,7 +264,7 @@ def create_swapping_dict_for_injection_points(entities, all_injection_points_per
     if save_file_path:
         path_ending = ""
         if interval:
-            path_ending = f'interval_{interval}.pkl'
+            path_ending = f'_interval_{interval}.pkl'
         else:
             path_ending = '.pkl'
 
@@ -330,3 +340,21 @@ def get_disjoint_entities(subject_dicts, seed = 406):
             used_chunks.update(entity_chunks)
 
     return disjoint_entities
+
+def split_into_bins_inclusive(total_batches, num_bins=8):
+    bin_size = total_batches // num_bins
+    remainder = total_batches % num_bins
+
+    bins = []
+    current = 1  # inclusive start from 1
+
+    for i in range(num_bins):
+        # Distribute remainder across the first few bins
+        size = bin_size + (1 if i < remainder else 0)
+        start = current
+        end = current + size - 1
+        bins.append((start, end))
+        current = end + 1
+
+    return bins
+
