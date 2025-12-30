@@ -5,14 +5,24 @@ Launch this with torchrun:
 
     torchrun --nproc-per-node=4 src/examples/llama/train.py run_name [OVERRIDES...]
 """
-import json
 import os
 import sys
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+src_path = os.path.join(project_root, 'src')
+
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
 import random
 import numpy as np
-import torch
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple, Optional, Iterator, cast
+from typing import List, Optional, cast
+
+import torch
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
+from pathlib import Path
 
 from olmo_core.config import Config, DType
 from olmo_core.data import (
@@ -52,29 +62,10 @@ from olmo_core.utils import (
     get_default_device, 
     seed_all
 )
-from olmo_core.data.utils import load_array_slice_into_tensor
-
-from olmo_core.distributed.utils import (
-    get_rank, 
-    all_gather
-)
-
-from olmo_eval import HFTokenizer
-
-from tqdm import tqdm
-import pandas as pd
-from copy import deepcopy 
-
-from ast import literal_eval
-from functools import cached_property
-
-import torch._dynamo
-torch._dynamo.config.suppress_errors = True
-from pathlib import Path
 
 from olmo_core.train.common import Duration
-# from metrics import MetricsLogger
 
+# from metrics import MetricsLogger
 
 # @dataclass
 # class BatchMetricCallback(Callback):
@@ -256,13 +247,7 @@ def main(run_name: str, model_name: str, epochs: int, peak_lr: float, global_bat
 
     optim = config.optim.build(model)
     dataset = config.dataset.build()
-
     data_loader = config.data_loader.build(dataset, collator=KASDataCollator(pad_token_id=dataset.pad_token_id, rank_batch_size=rank_batch_size), mesh=world_mesh)
-    # data_loader.reshuffle(1)
-    # for i, batch in enumerate(data_loader):
-    #     print(batch)
-    #     if i == 1:
-    #         break
 
     trainer = config.trainer.build(model, optim, data_loader, mesh=world_mesh)
 
