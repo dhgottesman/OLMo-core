@@ -30,7 +30,6 @@ from olmo_core.data import (
     NumpyDatasetConfig,
     NumpyDatasetType,
     TokenizerConfig,
-    DataCollator,
     KASDataCollator
 )
 
