@@ -14,10 +14,11 @@
             "balanced": false
         },
         "paths": [
-            "/home/morg/students/gottesman3/knowledge-analysis-suite/dolma/python/final_tokenizations_with_offsets/no_special/*.npy"
+            "/home/morg/students/gottesman3/LMEnt/dataset-tokenized/*.npy"
         ],
-        "include_instance_metadata": false,
-        "work_dir": "/home/morg/students/gottesman3/knowledge-analysis-suite/OLMo-core/hp_final/dataset-cache"
+        "include_instance_metadata": true,
+        "work_dir": "/home/morg/students/gottesman3/LMEnt/OLMo-core/hp_final/dataset-cache",
+        "project_dir": "/home/morg/students/gottesman3/LMEnt"
     },
     "data_loader": {
         "global_batch_size": 32768,

@@ -1491,8 +1491,13 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         work_dir = kwargs.pop("work_dir", None)
         if work_dir is not None:
             work_dir = Path(work_dir)
+        project_dir = kwargs.pop("project_dir", None)
+        if project_dir is not None:
+            project_dir = Path(project_dir)
+        self.use_existing_files = kwargs.pop("use_existing_files", True)
         super().__init__(*args, **kwargs)
         self.work_dir = work_dir
+        self.project_dir = project_dir
         self.metadata = self._load_metadata()
 
     def _get_entities_within_range(self, entities: List[Dict[str, Any]], char_start: int, char_end: int) -> List[Dict[str, str]]:
@@ -1525,11 +1530,8 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         metadata_dir.mkdir(parents=True, exist_ok=True)
 
         for path in tqdm(self.paths, desc="Loading metadata"):
-            metadata_path = os.path.join(
-                os.path.dirname(path),
-                os.path.basename(path).replace(".npy", "_new_2.csv") #".csv".gz
-            )
-            index_path = self._get_metadata_index_path(metadata_path)
+            metadata_path = self.project_dir / "dataset-metadata" / os.path.basename(path).replace(".npy", ".csv")
+            index_path = self._get_metadata_index_path(path)
             metadata[path] = {
                 "metadata_path": metadata_path,
                 "metadata": KASMetadata(metadata_path, index_path, headers)
@@ -1538,11 +1540,14 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         return metadata
 
     def _get_metadata_index_path(self, path: PathOrStr) -> Path:
-        sha256_hash = hashlib.sha256()
-        sha256_hash.update(str(path).encode())
-        sha256_hash.update(str(get_file_size(path)).encode())
-        path_hash = sha256_hash.hexdigest()
-        return self.work_dir / "dataset-metadata" / f"metadata-{path_hash}.npy"
+        if self.use_existing_files:
+            return self.work_dir / "dataset-metadata" / f"metadata-{os.path.basename(path)}"
+        else:
+            sha256_hash = hashlib.sha256()
+            sha256_hash.update(str(path).encode())
+            sha256_hash.update(str(get_file_size(path)).encode())
+            path_hash = sha256_hash.hexdigest()
+            return self.work_dir / "dataset-metadata" / f"metadata-{path_hash}.npy"
 
     def _read_chunk_indices(self, path: PathOrStr, index: int) -> Tuple[int, int]:
         indices_path = self._get_document_indices_path(path)
@@ -1598,6 +1603,18 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
 
         return out
     
+    def _get_document_indices_path(self, path: PathOrStr) -> Path:
+        if self.use_existing_files:
+            return self.work_dir / "dataset-common" / f"bucketed-doc-indices-{os.path.basename(path)}"
+        else:
+            sha256_hash = hashlib.sha256()
+            sha256_hash.update(str(path).encode())
+            sha256_hash.update(str(self._get_file_size(path)).encode())
+            for seq_len in self.all_sequence_lengths:
+                sha256_hash.update(str(seq_len).encode())
+            path_hash = sha256_hash.hexdigest()
+            return self.work_dir / "dataset-common" / f"bucketed-doc-indices-{path_hash}.npy"
+
     def _write_document_indices(self):
         paths_needed: List[PathOrStr] = []
         for path in self.paths:
@@ -1814,6 +1831,10 @@ class NumpyDatasetConfig(Config):
     .. tip::
         You can save a lot of time and disk space by setting this to a common directory across
         all of you runs.
+    """
+    project_dir: Optional[str] = None
+    """
+    The directory of the project usually `.../LMEnt`
     """
 
     def validate(self):
@@ -2072,6 +2093,7 @@ class NumpyDatasetConfig(Config):
                 metadata=metadata,
                 include_instance_metadata=self.include_instance_metadata,
                 work_dir=Path(self.work_dir) if self.work_dir is not None else None,
+                project_dir=Path(self.project_dir) if self.project_dir is not None else None,
             )
         else:
             raise NotImplementedError(self.name)

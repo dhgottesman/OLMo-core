@@ -123,6 +123,7 @@ def build_config(config: Dict[str, Any]) -> ExperimentConfig:
     max_sequence_length = ds["max_sequence_length"]
     min_sequence_length = ds["min_sequence_length"]
     work_dir = ds["work_dir"]
+    project_dir = ds["project_dir"]
     dataset_tokenized = ds["paths"]
     include_instance_metadata = ds["include_instance_metadata"]
 
@@ -207,7 +208,8 @@ def build_config(config: Dict[str, Any]) -> ExperimentConfig:
         min_sequence_length=min_sequence_length,
         vsl_curriculum=VSLCurriculumConfig(name=curriculum, num_cycles=num_cycles, balanced=balanced),
         tokenizer=tokenizer_config,
-        work_dir=str(work_dir),
+        work_dir=work_dir,
+        project_dir=project_dir,
         include_instance_metadata=include_instance_metadata,
     )
 
@@ -300,7 +302,7 @@ def main(config_filepath: str):
 
     optim = config.optim.build(model)
     dataset = config.dataset.build()
-    data_loader = config.data_loader.build(dataset, collator=KASDataCollator(pad_token_id=dataset.pad_token_id, rank_batch_size=trainer.rank_microbatch_size), mesh=world_mesh)
+    data_loader = config.data_loader.build(dataset, collator=KASDataCollator(pad_token_id=dataset.pad_token_id, rank_batch_size=config.trainer.rank_microbatch_size), mesh=world_mesh)
 
     trainer = config.trainer.build(model, optim, data_loader, mesh=world_mesh)
 
@@ -309,13 +311,13 @@ def main(config_filepath: str):
     cast(WandBCallback, trainer.callbacks["wandb"]).config = config_dict
     cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config_dict
 
-    # Train.
-    trainer.fit()
+    # # Train
+    # trainer.fit()
 
 
 if __name__ == "__main__":
-    config_filepath = sys.argv[1]
-    prepare_training_environment()
+    config_filepath = "/home/morg/students/gottesman3/LMEnt/OLMo-core/src/examples/kas/kas_config.json" #sys.argv[1]
+    # prepare_training_environment()
     try:
         main(config_filepath)
     finally:
