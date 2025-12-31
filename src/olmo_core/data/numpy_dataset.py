@@ -1491,13 +1491,10 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         work_dir = kwargs.pop("work_dir", None)
         if work_dir is not None:
             work_dir = Path(work_dir)
-        project_dir = kwargs.pop("project_dir", None)
-        if project_dir is not None:
-            project_dir = Path(project_dir)
         self.use_existing_files = kwargs.pop("use_existing_files", True)
         super().__init__(*args, **kwargs)
         self.work_dir = work_dir
-        self.project_dir = project_dir
+        self.dataset_dir = work_dir.parent
         self.metadata = self._load_metadata()
 
     def _get_entities_within_range(self, entities: List[Dict[str, Any]], char_start: int, char_end: int) -> List[Dict[str, str]]:
@@ -1530,7 +1527,7 @@ class NumpyKASVSLDataset(NumpyVSLDataset):
         metadata_dir.mkdir(parents=True, exist_ok=True)
 
         for path in tqdm(self.paths, desc="Loading metadata"):
-            metadata_path = self.project_dir / "dataset-metadata" / os.path.basename(path).replace(".npy", ".csv")
+            metadata_path = self.dataset_dir / "dataset-metadata" / os.path.basename(path).replace(".npy", ".csv")
             index_path = self._get_metadata_index_path(path)
             metadata[path] = {
                 "metadata_path": metadata_path,
@@ -1832,10 +1829,6 @@ class NumpyDatasetConfig(Config):
         You can save a lot of time and disk space by setting this to a common directory across
         all of you runs.
     """
-    project_dir: Optional[str] = None
-    """
-    The directory of the project usually `.../LMEnt`
-    """
 
     def validate(self):
         if self.name in (NumpyDatasetType.fsl, NumpyDatasetType.padded_fsl):
@@ -2093,7 +2086,6 @@ class NumpyDatasetConfig(Config):
                 metadata=metadata,
                 include_instance_metadata=self.include_instance_metadata,
                 work_dir=Path(self.work_dir) if self.work_dir is not None else None,
-                project_dir=Path(self.project_dir) if self.project_dir is not None else None,
             )
         else:
             raise NotImplementedError(self.name)

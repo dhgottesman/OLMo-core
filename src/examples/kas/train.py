@@ -123,7 +123,6 @@ def build_config(config: Dict[str, Any]) -> ExperimentConfig:
     max_sequence_length = ds["max_sequence_length"]
     min_sequence_length = ds["min_sequence_length"]
     work_dir = ds["work_dir"]
-    project_dir = ds["project_dir"]
     dataset_tokenized = ds["paths"]
     include_instance_metadata = ds["include_instance_metadata"]
 
@@ -209,7 +208,6 @@ def build_config(config: Dict[str, Any]) -> ExperimentConfig:
         vsl_curriculum=VSLCurriculumConfig(name=curriculum, num_cycles=num_cycles, balanced=balanced),
         tokenizer=tokenizer_config,
         work_dir=work_dir,
-        project_dir=project_dir,
         include_instance_metadata=include_instance_metadata,
     )
 
@@ -276,6 +274,33 @@ def build_config(config: Dict[str, Any]) -> ExperimentConfig:
         trainer=trainer_config,
     )
 
+def get_dataset_dataloader_for_evals(config_filepath: str, epoch: int=1):
+    os.environ["MASTER_PORT"] = "29500"
+    os.environ["RANK"] = "0"
+    os.environ["WORLD_SIZE"] = "1"
+    os.environ["MASTER_ADDR"] = "localhost"
+
+    with open(config_filepath, "r") as f:
+        config_dict = json.load(f)
+    
+    config = build_config(config_dict)
+    print(config, flush=True)
+
+    # Set RNG states on all devices.
+    seed_all(config.init_seed)
+    set_random_seeds(config.init_seed)
+
+    device = get_default_device()
+
+    world_mesh = config.model.build_mesh(device=device)
+
+    dataset = config.dataset.build()
+    data_loader = config.data_loader.build(dataset, collator=KASDataCollator(pad_token_id=dataset.pad_token_id, rank_batch_size=config.trainer.rank_microbatch_size), mesh=world_mesh)
+    
+    data_loader.reshuffle(epoch)
+
+    return dataset, data_loader
+
 def main(config_filepath: str):
     with open(config_filepath, "r") as f:
         config_dict = json.load(f)
@@ -311,13 +336,13 @@ def main(config_filepath: str):
     cast(WandBCallback, trainer.callbacks["wandb"]).config = config_dict
     cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config_dict
 
-    # # Train
-    # trainer.fit()
+    # Train
+    trainer.fit()
 
 
 if __name__ == "__main__":
-    config_filepath = "/home/morg/students/gottesman3/LMEnt/OLMo-core/src/examples/kas/kas_config.json" #sys.argv[1]
-    # prepare_training_environment()
+    config_filepath = sys.argv[1]   # e.g., kas_config.json
+    prepare_training_environment()
     try:
         main(config_filepath)
     finally:

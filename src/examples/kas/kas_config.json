@@ -14,11 +14,10 @@
             "balanced": false
         },
         "paths": [
-            "/home/morg/students/gottesman3/LMEnt/dataset-tokenized/*.npy"
+            "/home/morg/students/gottesman3/LMEnt-Dataset2/dataset-tokenized/*.npy"
         ],
         "include_instance_metadata": true,
-        "work_dir": "/home/morg/students/gottesman3/LMEnt/OLMo-core/hp_final/dataset-cache",
-        "project_dir": "/home/morg/students/gottesman3/LMEnt"
+        "work_dir": "/home/morg/students/gottesman3/LMEnt-Dataset2/dataset-cache"
     },
     "data_loader": {
         "global_batch_size": 32768,
