@@ -7,6 +7,7 @@ Launch this with torchrun:
 """
 import os
 import sys
+import json
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 src_path = os.path.join(project_root, 'src')
@@ -17,7 +18,7 @@ if src_path not in sys.path:
 import random
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 import torch
 import torch._dynamo
@@ -106,8 +107,64 @@ def set_random_seeds(seed: int):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def build_config(run_name: str, model_name: str, epochs: int, peak_lr: float, global_batch_size: int, weight_decay: float, rank_batch_size: int, overrides: List[str], include_instance_metadata: Optional[bool] = False) -> ExperimentConfig:
+def build_config(config: Dict[str, Any]) -> ExperimentConfig:
     tokenizer_config = TokenizerConfig.dolma2()
+
+    # ---- model ----
+    model_name = config["model"]
+
+    # ---- optim ----
+    peak_lr = config["optim"]["lr"]
+    weight_decay = config["optim"]["weight_decay"]
+
+    # ---- dataset ----
+    ds = config["dataset"]
+    dataset_name = ds["name"]                      
+    max_sequence_length = ds["max_sequence_length"]
+    min_sequence_length = ds["min_sequence_length"]
+    work_dir = ds["work_dir"]
+    dataset_tokenized = ds["paths"]
+    include_instance_metadata = ds["include_instance_metadata"]
+
+    if "vsl_curriculum" not in ds:
+        raise ValueError("Only VSL Curriculum is implemented")
+
+    vsl = ds["vsl_curriculum"]
+    curriculum = vsl["name"]
+    num_cycles = vsl["num_cycles"]
+    balanced = vsl["balanced"]
+
+    # ---- data_loader ----
+    dl = config["data_loader"]
+    global_batch_size = dl["global_batch_size"]
+    seed = dl["seed"]
+    num_workers = dl["num_workers"]
+    prefetch_factor = dl["prefetch_factor"]
+
+    # ---- trainer ----
+    tr = config["trainer"]
+    rank_microbatch_size = tr["rank_microbatch_size"]
+    save_overwrite = tr["save_overwrite"]
+
+    # ---- callbacks ----
+    cbs = tr["callbacks"]
+    scheduler = cbs["lr_scheduler"]
+    grad_clipper = cbs["grad_clipper"]
+    checkpointer = cbs["checkpointer"]
+    wandb = cbs["wandb"]
+    downstream_evaluator = cbs["downstream_evaluator"]
+
+    # max_duration is specified as {"value": 1, "unit": "epochs"} (or "steps")
+    md = tr["max_duration"]
+    if md["unit"] == "epochs":
+        max_duration = Duration.epochs(md["value"])
+    elif md["unit"] == "steps":
+        max_duration = Duration.steps(md["value"])
+    else:
+        raise ValueError(f"Unsupported max_duration unit: {md['unit']}")
+
+    save_folder = Path(tr["save_folder"], f"{model_name}_{peak_lr}_{global_batch_size}_{weight_decay}_{max_duration.value}")
+    save_folder.mkdir(parents=True, exist_ok=True)
 
     match model_name:
         case "olmo2_170M":
@@ -127,24 +184,28 @@ def build_config(run_name: str, model_name: str, epochs: int, peak_lr: float, gl
         fused_ops=False,
         use_flash=False,
         dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.fsdp, param_dtype=DType.bfloat16, reduce_dtype=DType.float32
+            name=DataParallelType.fsdp, 
+            param_dtype=DType.bfloat16, 
+            reduce_dtype=DType.float32
         ),
     )
 
     optim_config = AdamWConfig(
         lr=peak_lr,
         group_overrides=[
-            OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=weight_decay))
+            OptimGroupOverride(
+                params=["embeddings.weight"], 
+                opts=dict(weight_decay=weight_decay)
+            ) # Daniela, need to double check this.
         ],
     )
 
-    work_dir = Path(run_name, "dataset-cache")
     dataset_config = NumpyDatasetConfig.glob(
-        "/home/morg/students/gottesman3/knowledge-analysis-suite/dolma/python/final_tokenizations_with_offsets/no_special/*.npy",  # can be globs
-        name=NumpyDatasetType.kas_vsl,
-        max_sequence_length=2048,
-        min_sequence_length=64,
-        vsl_curriculum=VSLCurriculumConfig(name=VSLCurriculumType.grow_p2, num_cycles=8, balanced=False),
+        *dataset_tokenized,  # can be globs
+        name=dataset_name,
+        max_sequence_length=max_sequence_length,
+        min_sequence_length=min_sequence_length,
+        vsl_curriculum=VSLCurriculumConfig(name=curriculum, num_cycles=num_cycles, balanced=balanced),
         tokenizer=tokenizer_config,
         work_dir=str(work_dir),
         include_instance_metadata=include_instance_metadata,
@@ -152,51 +213,42 @@ def build_config(run_name: str, model_name: str, epochs: int, peak_lr: float, gl
 
     data_loader_config = NumpyDataLoaderConfig(
         global_batch_size=global_batch_size,
-        seed=0,
-        num_workers=4,
-        prefetch_factor=8,
+        seed=seed,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
     )
 
-    max_duration = Duration.epochs(epochs)
-    save_folder = Path(run_name, f"{model_name}_{optim_config.lr}_{data_loader_config.global_batch_size}_{weight_decay}_{max_duration.value}")
-    save_folder.mkdir(parents=True, exist_ok=True)
     trainer_config = (
         TrainerConfig(
             save_folder=str(save_folder),
-            rank_microbatch_size=rank_batch_size,
-            save_overwrite=True,
-            metrics_collect_interval=1,
-            cancel_check_interval=5,
-            max_duration=max_duration,  # 27416 steps is ~1 epoch on the full dataset
+            rank_microbatch_size=rank_microbatch_size,
+            save_overwrite=save_overwrite,
+            metrics_collect_interval=tr["metrics_collect_interval"],
+            cancel_check_interval=tr["cancel_check_interval"],
+            max_duration=max_duration,
             load_key_mapping={
                 # For backwards compatibility when loading older checkpoints.
                 "lm_head.w_out.weight": "w_out.weight",
                 "lm_head.norm.weight": "norm.weight",
             },
         )
-        .with_callback("lr_scheduler", SchedulerCallback(scheduler=CosWithWarmup(warmup_steps=1000)))
-        .with_callback(
-            "seq_len_scheduler",
-            SequenceLengthSchedulerCallback(
-                min_sequence_length=64, warmup_steps=100, enabled=False
-            ),
-        )
+        .with_callback("lr_scheduler", SchedulerCallback(scheduler=CosWithWarmup(warmup_steps=scheduler["warmup_steps"])))
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
-        .with_callback("grad_clipper", GradClipperCallback(max_grad_norm=1.0))
+        .with_callback("grad_clipper", GradClipperCallback(max_grad_norm=grad_clipper["max_grad_norm"]))
         .with_callback(
             "checkpointer",
             CheckpointerCallback(
-                save_interval=1000,
-                ephemeral_save_interval=500,
-                save_async=True,
+                save_interval=checkpointer["save_interval"],
+                ephemeral_save_interval=checkpointer["ephemeral_save_interval"],
+                save_async=checkpointer["save_async"],
             ),
         )
         .with_callback(
             "wandb",
             WandBCallback(
                 name=str(save_folder),
-                cancel_check_interval=10,
-                enabled=True,  # change to true to enable
+                cancel_check_interval=wandb["cancel_check_interval"],
+                enabled=True,
             ),
         )
         .with_callback("config_saver", ConfigSaverCallback())
@@ -204,9 +256,9 @@ def build_config(run_name: str, model_name: str, epochs: int, peak_lr: float, gl
         .with_callback(
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
-                tasks=["arc_easy", "arc_challenge", "openbook_qa", "sciq", "hellaswag", "piqa", "winogrande","commonsense_qa", "trivia_qa_wiki_ppl"],
+                tasks=downstream_evaluator["tasks"],
                 tokenizer=tokenizer_config,
-                eval_interval=1000,
+                eval_interval=downstream_evaluator["eval_interval"],
             ),
         )
         # .with_callback(
@@ -214,17 +266,19 @@ def build_config(run_name: str, model_name: str, epochs: int, peak_lr: float, gl
         #     BatchMetricCallback()
         # )
     ) 
-
     return ExperimentConfig(
         model=model_config,
         optim=optim_config,
         dataset=dataset_config,
         data_loader=data_loader_config,
         trainer=trainer_config,
-    ).merge(overrides)
+    )
 
-def main(run_name: str, model_name: str, epochs: int, peak_lr: float, global_batch_size: int, weight_decay: float, rank_batch_size: int, overrides: List[str]):
-    config = build_config(run_name, model_name, epochs, peak_lr, global_batch_size, weight_decay, rank_batch_size, overrides)
+def main(config_filepath: str):
+    with open(config_filepath, "r") as f:
+        config_dict = json.load(f)
+    
+    config = build_config(config_dict)
     print(config, flush=True)
 
     # Set RNG states on all devices.
@@ -246,7 +300,7 @@ def main(run_name: str, model_name: str, epochs: int, peak_lr: float, global_bat
 
     optim = config.optim.build(model)
     dataset = config.dataset.build()
-    data_loader = config.data_loader.build(dataset, collator=KASDataCollator(pad_token_id=dataset.pad_token_id, rank_batch_size=rank_batch_size), mesh=world_mesh)
+    data_loader = config.data_loader.build(dataset, collator=KASDataCollator(pad_token_id=dataset.pad_token_id, rank_batch_size=trainer.rank_microbatch_size), mesh=world_mesh)
 
     trainer = config.trainer.build(model, optim, data_loader, mesh=world_mesh)
 
@@ -260,19 +314,9 @@ def main(run_name: str, model_name: str, epochs: int, peak_lr: float, global_bat
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 7:
-        print(f"Usage: python {sys.argv[0]} run_name model_name epochs peak_lr global_batch_size weight_decay rank_batch_size [OVERRIDES...]")
-        sys.exit(1)
-
-    run_name, model_name, epochs, peak_lr, global_batch_size, weight_decay, rank_batch_size, *overrides = sys.argv[1:]
-    epochs = int(epochs)
-    peak_lr = float(peak_lr)
-    global_batch_size = int(global_batch_size)
-    weight_decay = float(weight_decay)
-    rank_batch_size = int(rank_batch_size)
-    print(f"Run name: {run_name} epochs {epochs} peak_lr {peak_lr} global_batch_size {global_batch_size} weight_decay {weight_decay} rank_batch_size {rank_batch_size} overrides {overrides}", flush=True)
+    config_filepath = sys.argv[1]
     prepare_training_environment()
     try:
-        main(run_name, model_name, epochs, peak_lr, global_batch_size, weight_decay, rank_batch_size, overrides)
+        main(config_filepath)
     finally:
         teardown_training_environment()
